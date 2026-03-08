@@ -31,8 +31,8 @@ function pickRandom<T>(arr: T[], count: number): T[] {
 
 function generateSeedNodes() {
   const nodes = [];
-  const radius = 100;
-  const spread = 30;
+  const radius = 120;
+  const spread = 60;
 
   for (let clusterId = 0; clusterId < 3; clusterId++) {
     const angle = SECTOR_ANGLES[clusterId];

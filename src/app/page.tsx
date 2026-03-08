@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import ChatPanel from "@/components/ChatPanel";
 import FlareGraph from "@/components/FlareGraph";
 import { useFlarePolling } from "@/hooks/useFlarePolling";
@@ -21,8 +21,11 @@ export default function Home() {
 
   const { flares, newFlareIds } = useFlarePolling(2000);
 
-  // Create session on mount
+  // Create session on mount (guard against strict mode double-mount)
+  const sessionCreatedRef = useRef(false);
   useEffect(() => {
+    if (sessionCreatedRef.current) return;
+    sessionCreatedRef.current = true;
     createSession().then(({ session_id }) => setSessionId(session_id));
   }, []);
 

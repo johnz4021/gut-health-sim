@@ -9,28 +9,31 @@ export function useFlarePolling(intervalMs = 2000) {
   const [newFlareIds, setNewFlareIds] = useState<Set<string>>(new Set());
   const knownIdsRef = useRef<Set<string>>(new Set());
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isFirstPollRef = useRef(true);
 
   const poll = useCallback(async () => {
     try {
       const data = await fetchFlares();
+      const isFirst = isFirstPollRef.current;
+      isFirstPollRef.current = false;
+
       const incoming = new Set<string>();
 
       for (const node of data) {
-        if (!knownIdsRef.current.has(node.id)) {
+        if (!knownIdsRef.current.has(node.id) && !isFirst) {
           incoming.add(node.id);
         }
-      }
-
-      // Update known IDs
-      for (const node of data) {
         knownIdsRef.current.add(node.id);
       }
 
-      setFlares(data);
+      // Only update flares state if the count changed (new node added)
+      // This prevents ForceGraph3D from rebuilding all nodes every poll
+      if (incoming.size > 0 || isFirst) {
+        setFlares(data);
+      }
 
       if (incoming.size > 0) {
         setNewFlareIds(incoming);
-        // Clear new IDs after 3 seconds
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => {
           setNewFlareIds(new Set());
@@ -42,7 +45,7 @@ export function useFlarePolling(intervalMs = 2000) {
   }, []);
 
   useEffect(() => {
-    poll(); // initial fetch
+    poll();
     const interval = setInterval(poll, intervalMs);
     return () => {
       clearInterval(interval);
