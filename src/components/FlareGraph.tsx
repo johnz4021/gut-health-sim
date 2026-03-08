@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { FlareNode, AxisScores } from "@/lib/types";
+import { FlareNode } from "@/lib/types";
 
 const FlareGraphInner = dynamic(() => import("./FlareGraphInner"), {
   ssr: false,
@@ -10,7 +10,6 @@ const FlareGraphInner = dynamic(() => import("./FlareGraphInner"), {
 interface Props {
   flares: FlareNode[];
   newFlareIds: Set<string>;
-  axisScores: AxisScores;
 }
 
 export default function FlareGraph(props: Props) {

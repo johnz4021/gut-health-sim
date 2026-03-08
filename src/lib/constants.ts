@@ -11,13 +11,6 @@ export const CLUSTER_LABELS: Record<number, string> = {
   2: "STRESS / GUT-BRAIN",
 };
 
-// 3 phenotypes at 120-degree intervals (radians)
-export const SECTOR_ANGLES: Record<number, number> = {
-  0: (90 * Math.PI) / 180,   // top
-  1: (210 * Math.PI) / 180,  // bottom-left
-  2: (330 * Math.PI) / 180,  // bottom-right
-};
-
 // Sensitivity axes (independent, not competing)
 export const AXIS_KEYS = ["fodmap", "stress_gut", "caffeine_sleep"] as const;
 

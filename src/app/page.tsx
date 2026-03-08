@@ -100,7 +100,6 @@ export default function Home() {
         <FlareGraph
           flares={flares}
           newFlareIds={newFlareIds}
-          axisScores={axisScores}
         />
       </div>
     </main>

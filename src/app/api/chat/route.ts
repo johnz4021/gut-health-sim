@@ -74,6 +74,7 @@ RESPONSE FORMAT — respond with ONLY this JSON:
   "axis_scores": {"fodmap": 0.5, "stress_gut": 0.5, "caffeine_sleep": 0.5},
   "converged": false,
   "sensitivity_profile": null,
+  "symptoms": ["extracted", "symptom", "keywords"],
   "context_update": {},
   "question_field": "field name you just asked about or null"
 }
@@ -148,6 +149,9 @@ export async function POST(request: Request) {
   session.axis_scores = parsed.axis_scores || session.axis_scores;
   if (parsed.context_update) {
     session.context = { ...session.context, ...parsed.context_update };
+  }
+  if (parsed.symptoms?.length) {
+    session.symptoms = parsed.symptoms;
   }
   if (parsed.question_field) {
     session.questions_asked.push(parsed.question_field);

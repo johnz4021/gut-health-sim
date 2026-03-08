@@ -4,7 +4,7 @@ import { useRef, useEffect, useCallback, useMemo } from "react";
 import ForceGraph3D from "react-force-graph-3d";
 import SpriteText from "three-spritetext";
 import * as THREE from "three";
-import { FlareNode, AxisScores } from "@/lib/types";
+import { FlareNode } from "@/lib/types";
 import { CLUSTER_LABELS, CLUSTER_COLORS } from "@/lib/constants";
 
 function getClusterCentroid(clusterId: number, allNodes: FlareNode[]) {
@@ -20,7 +20,6 @@ function getClusterCentroid(clusterId: number, allNodes: FlareNode[]) {
 interface Props {
   flares: FlareNode[];
   newFlareIds: Set<string>;
-  axisScores: AxisScores;
 }
 
 export default function FlareGraphInner({ flares, newFlareIds }: Props) {
@@ -51,10 +50,11 @@ export default function FlareGraphInner({ flares, newFlareIds }: Props) {
 
       // Point camera at the centroid of all node data
       const allNodes = flaresRef.current;
-      const cx = allNodes.reduce((s, n) => s + (n.x || 0), 0) / allNodes.length;
-      const cy = allNodes.reduce((s, n) => s + (n.y || 0), 0) / allNodes.length;
-      const cz = allNodes.reduce((s, n) => s + (n.z || 0), 0) / allNodes.length;
-      fg.cameraPosition({ x: cx, y: cy, z: cz + 350 }, { x: cx, y: cy, z: cz }, 0);
+      const S = 3; // must match SPREAD below
+      const cx = S * allNodes.reduce((s, n) => s + (n.x || 0), 0) / allNodes.length;
+      const cy = S * allNodes.reduce((s, n) => s + (n.y || 0), 0) / allNodes.length;
+      const cz = S * allNodes.reduce((s, n) => s + (n.z || 0), 0) / allNodes.length;
+      fg.cameraPosition({ x: cx, y: cy, z: cz + 700 }, { x: cx, y: cy, z: cz }, 0);
 
       const controls = fg.controls();
       if (controls) {
@@ -75,9 +75,9 @@ export default function FlareGraphInner({ flares, newFlareIds }: Props) {
         const starGeo = new THREE.BufferGeometry();
         const positions = new Float32Array(starCount * 3);
         for (let i = 0; i < starCount; i++) {
-          positions[i * 3] = (Math.random() - 0.5) * 2000;
-          positions[i * 3 + 1] = (Math.random() - 0.5) * 2000;
-          positions[i * 3 + 2] = (Math.random() - 0.5) * 2000;
+          positions[i * 3] = (Math.random() - 0.5) * 4000;
+          positions[i * 3 + 1] = (Math.random() - 0.5) * 4000;
+          positions[i * 3 + 2] = (Math.random() - 0.5) * 4000;
         }
         starGeo.setAttribute(
           "position",
@@ -103,14 +103,14 @@ export default function FlareGraphInner({ flares, newFlareIds }: Props) {
           const label = CLUSTER_LABELS[clusterId];
           const color = CLUSTER_COLORS[clusterId];
 
-          const sprite = new SpriteText(label, 8, color);
+          const sprite = new SpriteText(label, 10, color);
           sprite.fontFace = "Orbitron, sans-serif";
           sprite.fontWeight = "700";
           sprite.backgroundColor = "rgba(0,0,0,0.5)";
           sprite.padding = 6;
           sprite.borderRadius = 4;
-          // Place label above the cluster centroid
-          sprite.position.set(centroid.x, centroid.y + 30, centroid.z);
+          // Place label above the cluster centroid (scaled to match SPREAD)
+          sprite.position.set(centroid.x * 3, centroid.y * 3 + 60, centroid.z * 3);
           sprite.material.depthWrite = false;
           sprite.renderOrder = 999;
           labelGroup.add(sprite);
@@ -123,18 +123,19 @@ export default function FlareGraphInner({ flares, newFlareIds }: Props) {
       fg.d3Force("link", null);
       fg.d3Force("center", null);
 
-      // Pin each node to its preprocessed coordinates
+      // Pin each node to its preprocessed coordinates (scaled up for readability)
+      const SPREAD = 3;
       for (const node of flaresRef.current) {
         if (node.x !== null && node.x !== undefined) {
-          node.fx = node.x;
-          node.fy = node.y as number;
-          node.fz = node.z as number;
+          node.fx = (node.x as number) * SPREAD;
+          node.fy = (node.y as number) * SPREAD;
+          node.fz = (node.z as number) * SPREAD;
         } else {
           // Live flare with no coordinates — place near cluster centroid
           const centroid = getClusterCentroid(node.clusterId, flaresRef.current);
-          node.fx = centroid.x + (Math.random() - 0.5) * 20;
-          node.fy = centroid.y + (Math.random() - 0.5) * 20;
-          node.fz = centroid.z + (Math.random() - 0.5) * 10;
+          node.fx = centroid.x + (Math.random() - 0.5) * 40;
+          node.fy = centroid.y + (Math.random() - 0.5) * 40;
+          node.fz = centroid.z + (Math.random() - 0.5) * 20;
         }
       }
     });
