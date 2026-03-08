@@ -1,0 +1,103 @@
+"use client";
+
+import { useRef, useEffect, useState } from "react";
+import ChatMessage from "./ChatMessage";
+import ProbabilityBar from "./ProbabilityBar";
+import PhenotypeCard from "./PhenotypeCard";
+import { ChatMessage as ChatMessageType, PhenotypeMatch } from "@/lib/types";
+
+interface Props {
+  messages: ChatMessageType[];
+  phenotypeProbs: Record<string, number>;
+  phenotypeMatch: PhenotypeMatch | null;
+  onSend: (message: string) => void;
+  isLoading: boolean;
+}
+
+export default function ChatPanel({
+  messages,
+  phenotypeProbs,
+  phenotypeMatch,
+  onSend,
+  isLoading,
+}: Props) {
+  const [input, setInput] = useState("");
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll on new messages
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages]);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!input.trim() || isLoading) return;
+    onSend(input.trim());
+    setInput("");
+  };
+
+  const hasProbs = Object.keys(phenotypeProbs).length > 0;
+
+  return (
+    <div className="flex flex-col h-full glass-panel rounded-r-none">
+      {/* Header */}
+      <div className="px-6 py-5 border-b border-white/5">
+        <h1 className="font-display text-xl tracking-widest text-white">
+          GUTMAP
+        </h1>
+        <p className="text-[11px] text-white/40 mt-1 tracking-wide">
+          IBS Trigger Discovery
+        </p>
+      </div>
+
+      {/* Messages */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
+        {messages.length === 0 && (
+          <div className="text-center text-white/20 text-sm mt-20">
+            <p className="font-display text-base mb-2">Describe your symptoms</p>
+            <p className="text-xs">Tell me about your most recent flare-up</p>
+          </div>
+        )}
+        {messages.map((msg) => (
+          <ChatMessage key={msg.id} message={msg} />
+        ))}
+        {isLoading && (
+          <div className="flex justify-start mb-3">
+            <div className="glass-panel rounded-2xl rounded-bl-md px-4 py-3 text-sm text-white/40">
+              <span className="animate-pulse">Thinking...</span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Probability bar */}
+      {hasProbs && !phenotypeMatch && <ProbabilityBar probs={phenotypeProbs} />}
+
+      {/* Phenotype match card */}
+      {phenotypeMatch && <PhenotypeCard match={phenotypeMatch} />}
+
+      {/* Input */}
+      <form onSubmit={handleSubmit} className="p-4 border-t border-white/5">
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Describe your symptoms..."
+            disabled={isLoading || !!phenotypeMatch}
+            className="flex-1 bg-transparent border border-white/10 rounded-lg px-4 py-2.5 text-sm text-white placeholder-white/30 outline-none focus:border-[#4ECDC4]/50 transition-colors disabled:opacity-40"
+          />
+          <button
+            type="submit"
+            disabled={isLoading || !input.trim() || !!phenotypeMatch}
+            className="px-4 py-2.5 rounded-lg bg-[#4ECDC4]/20 border border-[#4ECDC4]/30 text-[#4ECDC4] text-sm font-medium hover:bg-[#4ECDC4]/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            Send
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
