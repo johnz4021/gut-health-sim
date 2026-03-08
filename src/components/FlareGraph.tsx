@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef, useState, useEffect } from "react";
 import dynamic from "next/dynamic";
 import { FlareNode, AxisScores } from "@/lib/types";
 
@@ -15,9 +16,23 @@ interface Props {
 }
 
 export default function FlareGraph(props: Props) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [dims, setDims] = useState({ width: 800, height: 600 });
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      setDims({ width: Math.round(width), height: Math.round(height) });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   return (
-    <div className="w-full h-full bg-[#000011]">
-      {props.flares.length > 0 && <FlareGraphInner {...props} />}
+    <div ref={containerRef} className="w-full h-full bg-[#000011]">
+      {props.flares.length > 0 && <FlareGraphInner {...props} width={dims.width} height={dims.height} />}
     </div>
   );
 }

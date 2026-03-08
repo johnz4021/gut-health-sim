@@ -42,9 +42,11 @@ interface Props {
   newFlareIds: Set<string>;
   draftNodeId: string | null;
   axisScores: AxisScores;
+  width: number;
+  height: number;
 }
 
-export default function FlareGraphInner({ flares, newFlareIds, draftNodeId, axisScores }: Props) {
+export default function FlareGraphInner({ flares, newFlareIds, draftNodeId, axisScores, width, height }: Props) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const graphRef = useRef<any>(null);
   const newFlareIdsRef = useRef<Set<string>>(newFlareIds);
@@ -61,15 +63,44 @@ export default function FlareGraphInner({ flares, newFlareIds, draftNodeId, axis
 
   // Pre-pin nodes before ForceGraph3D sees them — prevents d3-force race condition
   const SPREAD = 3;
+  const INTRA_CLUSTER_EXPAND = 12; // expand within-cluster distances
   const graphData = useMemo(() => {
+    // First pass: compute cluster centroids from raw UMAP coords
+    const clusterSums: Record<number, { sx: number; sy: number; sz: number; count: number }> = {};
+    for (const node of flares) {
+      if (node.id === draftNodeId || node.x == null) continue;
+      const cid = node.clusterId;
+      if (!clusterSums[cid]) clusterSums[cid] = { sx: 0, sy: 0, sz: 0, count: 0 };
+      clusterSums[cid].sx += node.x;
+      clusterSums[cid].sy += node.y ?? 0;
+      clusterSums[cid].sz += node.z ?? 0;
+      clusterSums[cid].count++;
+    }
+
+    // Second pass: pin each node — global spread + intra-cluster expansion
     for (const node of flares) {
       if (node.id === draftNodeId) {
         // Draft handled by rAF loop
         if (node.fx === undefined) { node.fx = 0; node.fy = 0; node.fz = 0; node.x = 0; node.y = 0; node.z = 0; }
       } else if (node.fx === undefined && node.x != null) {
-        node.fx = node.x * SPREAD;
-        node.fy = (node.y ?? 0) * SPREAD;
-        node.fz = (node.z ?? 0) * SPREAD;
+        const c = clusterSums[node.clusterId];
+        if (c && c.count > 1) {
+          const cx = c.sx / c.count;
+          const cy = c.sy / c.count;
+          const cz = c.sz / c.count;
+          // Offset from centroid, expanded
+          const dx = (node.x - cx) * INTRA_CLUSTER_EXPAND;
+          const dy = ((node.y ?? 0) - cy) * INTRA_CLUSTER_EXPAND;
+          const dz = ((node.z ?? 0) - cz) * INTRA_CLUSTER_EXPAND;
+          // Final position = scaled centroid + expanded offset
+          node.fx = cx * SPREAD + dx;
+          node.fy = cy * SPREAD + dy;
+          node.fz = cz * SPREAD + dz;
+        } else {
+          node.fx = node.x * SPREAD;
+          node.fy = (node.y ?? 0) * SPREAD;
+          node.fz = (node.z ?? 0) * SPREAD;
+        }
         // Also set x/y/z so ForceGraph3D renders at correct positions immediately
         node.x = node.fx;
         node.y = node.fy;
@@ -93,7 +124,7 @@ export default function FlareGraphInner({ flares, newFlareIds, draftNodeId, axis
       const cx = allNodes.reduce((s, n) => s + (n.fx ?? 0), 0) / allNodes.length;
       const cy = allNodes.reduce((s, n) => s + (n.fy ?? 0), 0) / allNodes.length;
       const cz = allNodes.reduce((s, n) => s + (n.fz ?? 0), 0) / allNodes.length;
-      fg.cameraPosition({ x: cx, y: cy, z: cz + 700 }, { x: cx, y: cy, z: cz }, 0);
+      fg.cameraPosition({ x: cx, y: cy, z: cz + 1200 }, { x: cx, y: cy, z: cz }, 0);
 
       const controls = fg.controls();
       if (controls) {
@@ -327,6 +358,8 @@ export default function FlareGraphInner({ flares, newFlareIds, draftNodeId, axis
     <ForceGraph3D
       ref={graphRef}
       graphData={graphData}
+      width={width}
+      height={height}
       nodeThreeObject={nodeThreeObject as never}
       nodeThreeObjectExtend={false}
       onNodeClick={handleNodeClick as never}
