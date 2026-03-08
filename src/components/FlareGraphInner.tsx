@@ -4,7 +4,7 @@ import { useRef, useEffect, useCallback, useMemo } from "react";
 import ForceGraph3D from "react-force-graph-3d";
 import SpriteText from "three-spritetext";
 import * as THREE from "three";
-import { FlareNode } from "@/lib/types";
+import { FlareNode, AxisScores } from "@/lib/types";
 import { CLUSTER_LABELS, CLUSTER_COLORS } from "@/lib/constants";
 
 function getClusterCentroid(clusterId: number, allNodes: FlareNode[]) {
@@ -20,7 +20,7 @@ function getClusterCentroid(clusterId: number, allNodes: FlareNode[]) {
 interface Props {
   flares: FlareNode[];
   newFlareIds: Set<string>;
-  phenotypeProbs: Record<string, number>;
+  axisScores: AxisScores;
 }
 
 export default function FlareGraphInner({ flares, newFlareIds }: Props) {

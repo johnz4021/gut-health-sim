@@ -139,6 +139,85 @@ def generate_seed_flares():
                 }
             })
 
+    # ── Bridge / mixed seed flares ──
+    bridge_configs = [
+        # FODMAP + Stress bridge (~4 cases)
+        {
+            "bridge": "fodmap_stress",
+            "known_triggers": {"caffeine_before_food": False, "sleep_hours": None,
+                               "stress_level": 4.0, "fodmap_load": 0.75,
+                               "alcohol": False, "meal_skipped": False,
+                               "anxiety_level": None, "travel": False},
+            "symptoms": ["bloating", "cramping", "pain"],
+            "narrative_templates": [
+                "Ate garlic bread during a stressful work week, symptoms were way worse than usual",
+                "Had onion soup while dealing with family stress, cramps were 10x worse than normal",
+                "Stressful deadline week and ate wheat pasta — bloating and pain were off the charts",
+                "Work crisis plus a big bowl of lentil soup, stomach was destroyed for two days",
+            ]
+        },
+        # Caffeine + Stress bridge (~4 cases)
+        {
+            "bridge": "caffeine_stress",
+            "known_triggers": {"caffeine_before_food": True, "sleep_hours": None,
+                               "stress_level": 4.0, "fodmap_load": 0.1,
+                               "alcohol": False, "meal_skipped": True,
+                               "anxiety_level": None, "travel": False},
+            "symptoms": ["urgency", "diarrhea", "nausea"],
+            "narrative_templates": [
+                "Didn't sleep, slammed coffee, super anxious about deadline — stomach was a disaster",
+                "Pulled an all-nighter, espresso first thing, presentation anxiety, couldn't leave the bathroom",
+                "Terrible sleep and three cups of coffee during a high-stress day, GI was wrecked",
+                "Barely slept, chugged coffee to cope with work pressure, urgency and nausea all morning",
+            ]
+        },
+        # FODMAP + Caffeine bridge (~4 cases)
+        {
+            "bridge": "fodmap_caffeine",
+            "known_triggers": {"caffeine_before_food": True, "sleep_hours": None,
+                               "stress_level": None, "fodmap_load": 0.7,
+                               "alcohol": False, "meal_skipped": False,
+                               "anxiety_level": None, "travel": False},
+            "symptoms": ["bloating", "urgency", "gas"],
+            "narrative_templates": [
+                "Had coffee and wheat toast on little sleep, bloating and urgency all morning",
+                "Espresso with garlic bread for breakfast on 5hrs sleep, gas and urgency hit hard",
+                "Coffee first thing then a big bowl of onion soup, barely slept — bloating was insane",
+                "Double shot latte plus pasta lunch on bad sleep, spent the afternoon in the bathroom",
+            ]
+        },
+    ]
+
+    for config in bridge_configs:
+        for i in range(4):
+            sleep = round(random.uniform(4.0, 5.5), 1)
+            stress = config["known_triggers"]["stress_level"] or round(random.uniform(1.5, 3.0), 1)
+            anxiety = round(random.uniform(3.0, 4.5), 1) if config["bridge"] == "caffeine_stress" else round(random.uniform(1.5, 3.0), 1)
+
+            narrative = config["narrative_templates"][i]
+
+            triggers = dict(config["known_triggers"])
+            triggers["sleep_hours"] = sleep
+            triggers["stress_level"] = stress
+            triggers["anxiety_level"] = anxiety
+
+            seed_flares.append({
+                "id": f"seed-mixed-{config['bridge']}-{i}",
+                "narrative": narrative,
+                "synthetic": True,
+                "phenotype_label": "mixed",
+                "extracted": {
+                    "symptoms": config["symptoms"],
+                    "known_triggers": triggers,
+                    "dietary_details": [],
+                    "physiological_details": [],
+                    "psychological_details": [],
+                    "behavioral_details": [],
+                    "novel_factors": [],
+                    "open_narrative_summary": narrative
+                }
+            })
+
     return seed_flares
 
 # ── STEP 2: GENERATE REALISTIC NARRATIVES (replaces Reddit scraping) ─────────
@@ -151,16 +230,23 @@ Ground them in established clinical research:
 - HPA axis stress-gut interaction research
 - Caffeine and colonic motility research
 
-Distribute across 3 endotypes (~{per_group} each, with ~{ambiguous} ambiguous/mixed):
+Distribution (~{per_group} per core endotype, ~{mixed} mixed/overlapping):
 
-1. FODMAP-sensitive: onion, garlic, wheat, lactose, legume triggers. Bloating, gas,
+1. FODMAP-sensitive (~{per_group}): onion, garlic, wheat, lactose, legume triggers. Bloating, gas,
    cramping 1-4hrs after eating. Varies by food amount and combination.
 
-2. Caffeine/Sleep-sensitive: coffee on empty stomach, <6hrs sleep, irregular meal
+2. Caffeine/Sleep-sensitive (~{per_group}): coffee on empty stomach, <6hrs sleep, irregular meal
    timing. Urgency, loose stools, morning flares. Some overlap with stress.
 
-3. Stress/Gut-Brain axis: high anxiety, work pressure, skipped meals, disrupted
+3. Stress/Gut-Brain axis (~{per_group}): high anxiety, work pressure, skipped meals, disrupted
    routine, travel. Pain, nausea, diarrhea. Delayed onset, sometimes next-day.
+
+4. Mixed/overlapping (~{mixed}): patients with triggers from 2+ axes simultaneously.
+   Examples of cross-axis amplification:
+   - "Stress made my FODMAP reaction worse than usual"
+   - "Bad sleep + coffee + high-FODMAP meal = worst flare ever"
+   - "Anxiety week and I ate garlic bread — symptoms were 10x worse"
+   These should feel like real patients who don't fit neatly into one category.
 
 Requirements for each narrative:
 - 2-4 sentences, casual first-person patient language (not clinical)
@@ -169,7 +255,7 @@ Requirements for each narrative:
 - Some should mention what helped or made it worse
 - Include ambiguous cases where the trigger isn't obvious
 - Mix demographics, lifestyles, eating habits
-- Some narratives should mention multiple potential triggers
+- Mixed cases should clearly mention multiple simultaneous triggers and note amplification effects
 
 Return ONLY a JSON array of strings. No markdown, no preamble."""
 
@@ -183,8 +269,8 @@ def generate_narratives(total=150):
     import anthropic
     anthropic_client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
-    per_group = total // 3
-    ambiguous = total - (per_group * 3) + 5  # ~5 ambiguous cases
+    mixed = total // 5  # ~20% mixed/overlapping
+    per_group = (total - mixed) // 3  # ~40 per core endotype
 
     # Generate in batches to stay within output limits
     BATCH_SIZE = 50
@@ -192,13 +278,15 @@ def generate_narratives(total=150):
 
     for batch_start in range(0, total, BATCH_SIZE):
         batch_n = min(BATCH_SIZE, total - batch_start)
+        batch_mixed = max(2, batch_n // 5)
+        batch_per_group = (batch_n - batch_mixed) // 3
         print(f"Generating narratives {batch_start+1}-{batch_start+batch_n}...")
 
         resp = anthropic_client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=8000,
             messages=[{"role": "user", "content": NARRATIVE_PROMPT.format(
-                n=batch_n, per_group=batch_n // 3, ambiguous=max(2, batch_n // 10)
+                n=batch_n, per_group=batch_per_group, mixed=batch_mixed
             )}]
         )
         text = resp.content[0].text.strip()
@@ -366,7 +454,7 @@ def fit_pipeline(matrix):
         reducer = obj["reducer"]
         clusterer = obj["clusterer"]
         coords = reducer.transform(matrix)
-        labels = clusterer.labels_
+        labels, _ = hdbscan_mod.approximate_predict(clusterer, matrix)
         return reducer, clusterer, coords, labels
 
     print("Fitting UMAP...")
@@ -392,6 +480,26 @@ def fit_pipeline(matrix):
     print(f"Pipeline cached. Discovered {len(set(labels)) - (1 if -1 in labels else 0)} clusters")
 
     return reducer, clusterer, coords, labels
+
+# ── AXIS SCORES ────────────────────────────────────────────────────────────
+
+def compute_axis_scores(flare):
+    """Compute independent sensitivity axis scores (0-1 each) from structured features."""
+    kt = flare.get("extracted", {}).get("known_triggers", {})
+    fodmap = normalize("fodmap_load", kt.get("fodmap_load"))
+    stress = max(
+        normalize("stress_level", kt.get("stress_level")),
+        normalize("anxiety_level", kt.get("anxiety_level"))
+    )
+    caffeine_sleep = max(
+        float(kt.get("caffeine_before_food", False) == True),
+        1.0 - normalize("sleep_hours", kt.get("sleep_hours"))  # low sleep → high score
+    )
+    return {
+        "fodmap": round(fodmap, 2),
+        "stress_gut": round(stress, 2),
+        "caffeine_sleep": round(caffeine_sleep, 2)
+    }
 
 # ── STEP 6: BUILD OUTPUT ────────────────────────────────────────────────────
 
@@ -424,7 +532,8 @@ def build_output(flares, coords, labels, clusterer):
             "symptoms": symptoms[:3],
             "label": " + ".join(symptoms[:2]) if symptoms else "flare",
             "summary": ex.get("open_narrative_summary", ""),
-            "novel_factors": ex.get("novel_factors", [])
+            "novel_factors": ex.get("novel_factors", []),
+            "axis_scores": compute_axis_scores(flare)
         })
 
     return output

@@ -1,3 +1,17 @@
+export interface AxisScores {
+  fodmap: number;
+  stress_gut: number;
+  caffeine_sleep: number;
+}
+
+export interface SensitivityProfile {
+  axis_scores: AxisScores;
+  primary_trigger: string;
+  amplifiers: string[];
+  confidence: number;
+  triggers: string[];
+}
+
 export interface FlareNode {
   id: string;
   label: string;
@@ -8,6 +22,7 @@ export interface FlareNode {
   synthetic: boolean;
   summary?: string;
   novel_factors?: string[];
+  axis_scores?: AxisScores;
   x?: number;
   y?: number;
   z?: number;
@@ -28,17 +43,10 @@ export interface ChatMessage {
   timestamp: number;
 }
 
-export interface PhenotypeMatch {
-  label: string;
-  confidence: number;
-  triggers: string[];
-  population_pct: number;
-}
-
 export interface ChatResponse {
   reply: string;
   state: "SYMPTOM_INTAKE" | "QUESTIONING" | "CONVERGED";
-  phenotype_probs: Record<string, number>;
+  axis_scores: AxisScores;
   converged: boolean;
-  phenotype_match: PhenotypeMatch | null;
+  sensitivity_profile: SensitivityProfile | null;
 }

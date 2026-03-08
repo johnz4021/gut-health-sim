@@ -5,18 +5,20 @@ import ChatPanel from "@/components/ChatPanel";
 import FlareGraph from "@/components/FlareGraph";
 import { useFlarePolling } from "@/hooks/useFlarePolling";
 import { createSession, sendMessage } from "@/lib/api";
-import { ChatMessage, PhenotypeMatch } from "@/lib/types";
+import { ChatMessage, AxisScores, SensitivityProfile } from "@/lib/types";
+
+const DEFAULT_AXIS_SCORES: AxisScores = {
+  fodmap: 0.5,
+  stress_gut: 0.5,
+  caffeine_sleep: 0.5,
+};
 
 export default function Home() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [phenotypeProbs, setPhenotypeProbs] = useState<Record<string, number>>(
-    {}
-  );
+  const [axisScores, setAxisScores] = useState<AxisScores>(DEFAULT_AXIS_SCORES);
   const [converged, setConverged] = useState(false);
-  const [phenotypeMatch, setPhenotypeMatch] = useState<PhenotypeMatch | null>(
-    null
-  );
+  const [sensitivityProfile, setSensitivityProfile] = useState<SensitivityProfile | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
   const { flares, newFlareIds } = useFlarePolling(2000);
@@ -56,13 +58,13 @@ export default function Home() {
         setMessages((prev) => [...prev, assistantMsg]);
 
         // Update state
-        if (response.phenotype_probs) {
-          setPhenotypeProbs(response.phenotype_probs);
+        if (response.axis_scores) {
+          setAxisScores(response.axis_scores);
         }
         if (response.converged) {
           setConverged(true);
-          if (response.phenotype_match) {
-            setPhenotypeMatch(response.phenotype_match);
+          if (response.sensitivity_profile) {
+            setSensitivityProfile(response.sensitivity_profile);
           }
         }
       } catch {
@@ -86,8 +88,8 @@ export default function Home() {
       <div className="w-[40%] h-full relative z-10">
         <ChatPanel
           messages={messages}
-          phenotypeProbs={phenotypeProbs}
-          phenotypeMatch={phenotypeMatch}
+          axisScores={axisScores}
+          sensitivityProfile={sensitivityProfile}
           onSend={handleSend}
           isLoading={isLoading}
         />
@@ -98,7 +100,7 @@ export default function Home() {
         <FlareGraph
           flares={flares}
           newFlareIds={newFlareIds}
-          phenotypeProbs={phenotypeProbs}
+          axisScores={axisScores}
         />
       </div>
     </main>

@@ -2,22 +2,22 @@
 
 import { useRef, useEffect, useState } from "react";
 import ChatMessage from "./ChatMessage";
-import ProbabilityBar from "./ProbabilityBar";
-import PhenotypeCard from "./PhenotypeCard";
-import { ChatMessage as ChatMessageType, PhenotypeMatch } from "@/lib/types";
+import SensitivityBar from "./ProbabilityBar";
+import ProfileCard from "./PhenotypeCard";
+import { ChatMessage as ChatMessageType, AxisScores, SensitivityProfile } from "@/lib/types";
 
 interface Props {
   messages: ChatMessageType[];
-  phenotypeProbs: Record<string, number>;
-  phenotypeMatch: PhenotypeMatch | null;
+  axisScores: AxisScores;
+  sensitivityProfile: SensitivityProfile | null;
   onSend: (message: string) => void;
   isLoading: boolean;
 }
 
 export default function ChatPanel({
   messages,
-  phenotypeProbs,
-  phenotypeMatch,
+  axisScores,
+  sensitivityProfile,
   onSend,
   isLoading,
 }: Props) {
@@ -38,7 +38,7 @@ export default function ChatPanel({
     setInput("");
   };
 
-  const hasProbs = Object.keys(phenotypeProbs).length > 0;
+  const hasScores = axisScores.fodmap !== 0.5 || axisScores.stress_gut !== 0.5 || axisScores.caffeine_sleep !== 0.5;
 
   return (
     <div className="flex flex-col h-full glass-panel rounded-r-none">
@@ -72,11 +72,11 @@ export default function ChatPanel({
         )}
       </div>
 
-      {/* Probability bar */}
-      {hasProbs && !phenotypeMatch && <ProbabilityBar probs={phenotypeProbs} />}
+      {/* Sensitivity bars */}
+      {hasScores && !sensitivityProfile && <SensitivityBar axisScores={axisScores} />}
 
-      {/* Phenotype match card */}
-      {phenotypeMatch && <PhenotypeCard match={phenotypeMatch} />}
+      {/* Profile card */}
+      {sensitivityProfile && <ProfileCard profile={sensitivityProfile} />}
 
       {/* Input */}
       <form onSubmit={handleSubmit} className="p-4 border-t border-white/5">
@@ -86,12 +86,12 @@ export default function ChatPanel({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Describe your symptoms..."
-            disabled={isLoading || !!phenotypeMatch}
+            disabled={isLoading || !!sensitivityProfile}
             className="flex-1 bg-transparent border border-white/10 rounded-lg px-4 py-2.5 text-sm text-white placeholder-white/30 outline-none focus:border-[#4ECDC4]/50 transition-colors disabled:opacity-40"
           />
           <button
             type="submit"
-            disabled={isLoading || !input.trim() || !!phenotypeMatch}
+            disabled={isLoading || !input.trim() || !!sensitivityProfile}
             className="px-4 py-2.5 rounded-lg bg-[#4ECDC4]/20 border border-[#4ECDC4]/30 text-[#4ECDC4] text-sm font-medium hover:bg-[#4ECDC4]/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
           >
             Send

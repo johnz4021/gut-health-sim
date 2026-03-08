@@ -1,46 +1,42 @@
 "use client";
 
-import { CLUSTER_COLORS, CLUSTER_LABELS } from "@/lib/constants";
+import { AXIS_KEYS, AXIS_COLORS, AXIS_LABELS } from "@/lib/constants";
+import { AxisScores } from "@/lib/types";
 
 interface Props {
-  probs: Record<string, number>;
+  axisScores: AxisScores;
 }
 
-const PROB_KEYS = ["A", "B", "C"];
-const CLUSTER_MAP: Record<string, number> = { A: 0, B: 1, C: 2 };
-
-export default function ProbabilityBar({ probs }: Props) {
+export default function SensitivityBar({ axisScores }: Props) {
   return (
-    <div className="px-4 py-3">
-      {/* Stacked bar */}
-      <div className="flex h-3 rounded-full overflow-hidden bg-white/5">
-        {PROB_KEYS.map((key) => {
-          const pct = (probs[key] || 0) * 100;
-          const clusterId = CLUSTER_MAP[key];
-          return (
-            <div
-              key={key}
-              style={{
-                width: `${pct}%`,
-                backgroundColor: CLUSTER_COLORS[clusterId],
-                transition: "width 0.5s ease",
-              }}
-            />
-          );
-        })}
-      </div>
-      {/* Labels */}
-      <div className="flex justify-between mt-1.5 text-[10px] text-white/50">
-        {PROB_KEYS.map((key) => {
-          const pct = Math.round((probs[key] || 0) * 100);
-          const clusterId = CLUSTER_MAP[key];
-          return (
-            <span key={key} style={{ color: CLUSTER_COLORS[clusterId] }}>
-              {CLUSTER_LABELS[clusterId]} {pct}%
-            </span>
-          );
-        })}
-      </div>
+    <div className="px-4 py-3 space-y-2">
+      {AXIS_KEYS.map((key) => {
+        const score = axisScores[key] || 0;
+        const pct = Math.round(score * 100);
+        const color = AXIS_COLORS[key];
+        return (
+          <div key={key}>
+            <div className="flex justify-between items-center mb-0.5">
+              <span className="text-[10px] tracking-wider text-white/50">
+                {AXIS_LABELS[key]}
+              </span>
+              <span className="text-[10px] font-mono" style={{ color }}>
+                {pct}%
+              </span>
+            </div>
+            <div className="h-2 rounded-full overflow-hidden bg-white/5">
+              <div
+                className="h-full rounded-full"
+                style={{
+                  width: `${pct}%`,
+                  backgroundColor: color,
+                  transition: "width 0.5s ease",
+                }}
+              />
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
