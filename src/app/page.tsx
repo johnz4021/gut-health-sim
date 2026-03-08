@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import ChatPanel from "@/components/ChatPanel";
 import FlareGraph from "@/components/FlareGraph";
 import { useFlarePolling } from "@/hooks/useFlarePolling";
 import { createSession, sendMessage } from "@/lib/api";
-import { ChatMessage, AxisScores, SensitivityProfile } from "@/lib/types";
+import { ChatMessage, AxisScores, SensitivityProfile, FlareNode } from "@/lib/types";
+import { CLUSTER_COLORS } from "@/lib/constants";
 
 const DEFAULT_AXIS_SCORES: AxisScores = {
   fodmap: 0.5,
@@ -13,15 +14,42 @@ const DEFAULT_AXIS_SCORES: AxisScores = {
   caffeine_sleep: 0.5,
 };
 
+const DRAFT_NODE_ID = "__draft__";
+
 export default function Home() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [axisScores, setAxisScores] = useState<AxisScores>(DEFAULT_AXIS_SCORES);
   const [converged, setConverged] = useState(false);
+  const [chatState, setChatState] = useState<"SYMPTOM_INTAKE" | "QUESTIONING" | "CONVERGED">("SYMPTOM_INTAKE");
   const [sensitivityProfile, setSensitivityProfile] = useState<SensitivityProfile | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
   const { flares, newFlareIds } = useFlarePolling(2000);
+
+  const draftActive = chatState !== "SYMPTOM_INTAKE" && !converged;
+  const draftNodeRef = useRef<FlareNode | null>(null);
+
+  // Create/destroy draft node synchronously so it's available for useMemo
+  if (draftActive && !draftNodeRef.current) {
+    draftNodeRef.current = {
+      id: DRAFT_NODE_ID,
+      label: "Analyzing...",
+      symptoms: [],
+      clusterId: -1,
+      color: CLUSTER_COLORS[-1],
+      confidence: 0,
+      synthetic: false,
+    };
+  } else if (!draftActive && draftNodeRef.current) {
+    draftNodeRef.current = null;
+  }
+
+  const mergedFlares = useMemo(() => {
+    if (!draftNodeRef.current) return flares;
+    return [...flares, draftNodeRef.current];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flares, draftActive, converged]);
 
   // Create session on mount (guard against strict mode double-mount)
   const sessionCreatedRef = useRef(false);
@@ -58,6 +86,9 @@ export default function Home() {
         setMessages((prev) => [...prev, assistantMsg]);
 
         // Update state
+        if (response.state) {
+          setChatState(response.state);
+        }
         if (response.axis_scores) {
           setAxisScores(response.axis_scores);
         }
@@ -98,8 +129,10 @@ export default function Home() {
       {/* 3D Force Graph — 60% */}
       <div className="w-[60%] h-full">
         <FlareGraph
-          flares={flares}
+          flares={mergedFlares}
           newFlareIds={newFlareIds}
+          draftNodeId={draftActive && !converged ? DRAFT_NODE_ID : null}
+          axisScores={axisScores}
         />
       </div>
     </main>

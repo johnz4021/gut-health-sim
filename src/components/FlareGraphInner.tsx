@@ -4,8 +4,28 @@ import { useRef, useEffect, useCallback, useMemo } from "react";
 import ForceGraph3D from "react-force-graph-3d";
 import SpriteText from "three-spritetext";
 import * as THREE from "three";
-import { FlareNode } from "@/lib/types";
+import { FlareNode, AxisScores } from "@/lib/types";
 import { CLUSTER_LABELS, CLUSTER_COLORS } from "@/lib/constants";
+
+const AXIS_TO_CLUSTER: Record<string, number> = {
+  caffeine_sleep: 0,
+  fodmap: 1,
+  stress_gut: 2,
+};
+
+function getDraftTarget(scores: AxisScores, allNodes: FlareNode[]): { x: number; y: number; z: number } {
+  let maxAxis = "fodmap";
+  let maxScore = 0;
+  for (const [axis, score] of Object.entries(scores)) {
+    if (score > maxScore) {
+      maxScore = score;
+      maxAxis = axis;
+    }
+  }
+  const clusterId = AXIS_TO_CLUSTER[maxAxis] ?? 1;
+  const realNodes = allNodes.filter((n) => n.id !== "__draft__");
+  return getClusterCentroid(clusterId, realNodes);
+}
 
 function getClusterCentroid(clusterId: number, allNodes: FlareNode[]) {
   const members = allNodes.filter(n => n.clusterId === clusterId);
@@ -20,24 +40,44 @@ function getClusterCentroid(clusterId: number, allNodes: FlareNode[]) {
 interface Props {
   flares: FlareNode[];
   newFlareIds: Set<string>;
+  draftNodeId: string | null;
+  axisScores: AxisScores;
 }
 
-export default function FlareGraphInner({ flares, newFlareIds }: Props) {
+export default function FlareGraphInner({ flares, newFlareIds, draftNodeId, axisScores }: Props) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const graphRef = useRef<any>(null);
   const newFlareIdsRef = useRef<Set<string>>(newFlareIds);
   const hoveredNodeRef = useRef<string | null>(null);
   const setupDoneRef = useRef(false);
   const flaresRef = useRef<FlareNode[]>(flares);
+  const draftNodeIdRef = useRef(draftNodeId);
+  const axisScoresRef = useRef(axisScores);
 
   newFlareIdsRef.current = newFlareIds;
   flaresRef.current = flares;
+  draftNodeIdRef.current = draftNodeId;
+  axisScoresRef.current = axisScores;
 
-  // Stable graphData — only updates when flares reference changes
-  const graphData = useMemo(
-    () => ({ nodes: flares, links: [] as never[] }),
-    [flares]
-  );
+  // Pre-pin nodes before ForceGraph3D sees them — prevents d3-force race condition
+  const SPREAD = 3;
+  const graphData = useMemo(() => {
+    for (const node of flares) {
+      if (node.id === draftNodeId) {
+        // Draft handled by rAF loop
+        if (node.fx === undefined) { node.fx = 0; node.fy = 0; node.fz = 0; node.x = 0; node.y = 0; node.z = 0; }
+      } else if (node.fx === undefined && node.x != null) {
+        node.fx = node.x * SPREAD;
+        node.fy = (node.y ?? 0) * SPREAD;
+        node.fz = (node.z ?? 0) * SPREAD;
+        // Also set x/y/z so ForceGraph3D renders at correct positions immediately
+        node.x = node.fx;
+        node.y = node.fy;
+        node.z = node.fz;
+      }
+    }
+    return { nodes: flares, links: [] as never[] };
+  }, [flares, draftNodeId]);
 
   // One-time setup — wait a frame for ForceGraph3D to init its layout
   useEffect(() => {
@@ -48,12 +88,11 @@ export default function FlareGraphInner({ flares, newFlareIds }: Props) {
       if (!fg || setupDoneRef.current) return;
       setupDoneRef.current = true;
 
-      // Point camera at the centroid of all node data
+      // Point camera at the centroid of all node data (use fx which is pre-set)
       const allNodes = flaresRef.current;
-      const S = 3; // must match SPREAD below
-      const cx = S * allNodes.reduce((s, n) => s + (n.x || 0), 0) / allNodes.length;
-      const cy = S * allNodes.reduce((s, n) => s + (n.y || 0), 0) / allNodes.length;
-      const cz = S * allNodes.reduce((s, n) => s + (n.z || 0), 0) / allNodes.length;
+      const cx = allNodes.reduce((s, n) => s + (n.fx ?? 0), 0) / allNodes.length;
+      const cy = allNodes.reduce((s, n) => s + (n.fy ?? 0), 0) / allNodes.length;
+      const cz = allNodes.reduce((s, n) => s + (n.fz ?? 0), 0) / allNodes.length;
       fg.cameraPosition({ x: cx, y: cy, z: cz + 700 }, { x: cx, y: cy, z: cz }, 0);
 
       const controls = fg.controls();
@@ -110,7 +149,7 @@ export default function FlareGraphInner({ flares, newFlareIds }: Props) {
           sprite.padding = 6;
           sprite.borderRadius = 4;
           // Place label above the cluster centroid (scaled to match SPREAD)
-          sprite.position.set(centroid.x * 3, centroid.y * 3 + 60, centroid.z * 3);
+          sprite.position.set(centroid.x, centroid.y + 60, centroid.z);
           sprite.material.depthWrite = false;
           sprite.renderOrder = 999;
           labelGroup.add(sprite);
@@ -118,59 +157,102 @@ export default function FlareGraphInner({ flares, newFlareIds }: Props) {
         scene.add(labelGroup);
       }
 
-      // Nullify all forces — UMAP coordinates are pre-computed
-      fg.d3Force("charge", null);
-      fg.d3Force("link", null);
-      fg.d3Force("center", null);
-
-      // Pin each node to its preprocessed coordinates (scaled up for readability)
-      const SPREAD = 3;
-      for (const node of flaresRef.current) {
-        if (node.x !== null && node.x !== undefined) {
-          node.fx = (node.x as number) * SPREAD;
-          node.fy = (node.y as number) * SPREAD;
-          node.fz = (node.z as number) * SPREAD;
-        } else {
-          // Live flare with no coordinates — place near cluster centroid
-          const centroid = getClusterCentroid(node.clusterId, flaresRef.current);
-          node.fx = centroid.x + (Math.random() - 0.5) * 40;
-          node.fy = centroid.y + (Math.random() - 0.5) * 40;
-          node.fz = centroid.z + (Math.random() - 0.5) * 20;
-        }
-      }
     });
 
     return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flares.length > 0]);
 
+  // rAF animation loop — lerp draft node toward dominant cluster + camera follow
+  useEffect(() => {
+    if (!draftNodeId) return;
+    let animId: number;
+    const CAM_LERP = 0.02; // smooth camera follow
+    const CAM_DISTANCE = 200; // how far the camera sits behind the node
+    const animate = () => {
+      const draft = flaresRef.current.find((n) => n.id === draftNodeIdRef.current);
+      if (!draft || !draftNodeIdRef.current) return;
+      const target = getDraftTarget(axisScoresRef.current, flaresRef.current);
+      const LERP = 0.03;
+      draft.fx = (draft.fx ?? 0) + (target.x - (draft.fx ?? 0)) * LERP;
+      draft.fy = (draft.fy ?? 0) + (target.y - (draft.fy ?? 0)) * LERP;
+      draft.fz = (draft.fz ?? 0) + (target.z - (draft.fz ?? 0)) * LERP;
+      if (draft.__threeObj) {
+        draft.__threeObj.position.set(draft.fx, draft.fy, draft.fz);
+      }
+
+      // Smoothly follow draft node with camera
+      const fg = graphRef.current;
+      if (fg) {
+        const camera = fg.camera();
+        if (camera) {
+          const dx = draft.fx ?? 0;
+          const dy = draft.fy ?? 0;
+          const dz = (draft.fz ?? 0) + CAM_DISTANCE;
+          camera.position.x += (dx - camera.position.x) * CAM_LERP;
+          camera.position.y += (dy - camera.position.y) * CAM_LERP;
+          camera.position.z += (dz - camera.position.z) * CAM_LERP;
+          // Keep looking at the draft node
+          const controls = fg.controls();
+          if (controls) {
+            controls.target.x += ((draft.fx ?? 0) - controls.target.x) * CAM_LERP;
+            controls.target.y += ((draft.fy ?? 0) - controls.target.y) * CAM_LERP;
+            controls.target.z += ((draft.fz ?? 0) - controls.target.z) * CAM_LERP;
+            controls.update();
+          }
+        }
+      }
+
+      animId = requestAnimationFrame(animate);
+    };
+
+    // Disable auto-rotate while following draft
+    const fg = graphRef.current;
+    if (fg) {
+      const controls = fg.controls();
+      if (controls) controls.autoRotate = false;
+    }
+
+    animId = requestAnimationFrame(animate);
+    return () => {
+      cancelAnimationFrame(animId);
+      // Re-enable auto-rotate when draft is removed
+      const fg = graphRef.current;
+      if (fg) {
+        const controls = fg.controls();
+        if (controls) controls.autoRotate = true;
+      }
+    };
+  }, [draftNodeId]);
+
   // Stable callback — reads from refs, never recreated
   const nodeThreeObject = useCallback(
     (node: FlareNode) => {
       const group = new THREE.Group();
       const isNew = newFlareIdsRef.current.has(node.id);
+      const isDraft = node.id === draftNodeIdRef.current;
       const isHovered = hoveredNodeRef.current === node.id;
 
       const sphereSize = 3;
       const geometry = new THREE.SphereGeometry(sphereSize, 32, 32);
       const material = new THREE.MeshStandardMaterial({
-        color: node.color,
+        color: isDraft ? "#C084FC" : node.color,
         metalness: 0.3,
-        roughness: 0.4,
+        roughness: isDraft ? 0.2 : 0.4,
         transparent: true,
         opacity: 0.9,
-        emissive: new THREE.Color(isNew ? "#FFD700" : node.color),
-        emissiveIntensity: isNew ? 0.8 : 0.15,
+        emissive: new THREE.Color(isDraft ? "#C084FC" : isNew ? "#FFD700" : node.color),
+        emissiveIntensity: isDraft ? 1.0 : isNew ? 0.8 : 0.15,
       });
       const sphere = new THREE.Mesh(geometry, material);
       group.add(sphere);
 
-      const glowSize = sphereSize * (isNew ? 2.5 : 1.8);
+      const glowSize = sphereSize * (isDraft ? 3 : isNew ? 2.5 : 1.8);
       const glowGeo = new THREE.SphereGeometry(glowSize, 24, 24);
       const glowMat = new THREE.MeshBasicMaterial({
-        color: new THREE.Color(isNew ? "#FFD700" : node.color),
+        color: new THREE.Color(isDraft ? "#C084FC" : isNew ? "#FFD700" : node.color),
         transparent: true,
-        opacity: isNew ? 0.2 : 0.1,
+        opacity: isDraft ? 0.25 : isNew ? 0.2 : 0.1,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
       });
@@ -179,18 +261,21 @@ export default function FlareGraphInner({ flares, newFlareIds }: Props) {
 
       // Breathing glow on all nodes
       let phase = Math.random() * Math.PI * 2;
-      const speed = isNew ? 0.03 : 0.01;
+      const speed = isDraft ? 0.05 : isNew ? 0.03 : 0.01;
+      const amplitude = isDraft ? 0.2 : isNew ? 0.15 : 0.08;
       glow.onBeforeRender = () => {
         phase += speed;
-        const scale = 1 + Math.sin(phase) * (isNew ? 0.15 : 0.08);
+        const scale = 1 + Math.sin(phase) * amplitude;
         glow.scale.setScalar(scale);
         glowMat.opacity =
-          (isNew ? 0.2 : 0.1) + Math.sin(phase) * (isNew ? 0.05 : 0.03);
+          (isDraft ? 0.25 : isNew ? 0.2 : 0.1) + Math.sin(phase) * (isDraft ? 0.08 : isNew ? 0.05 : 0.03);
       };
 
-      const labelText = isHovered && node.summary
-        ? node.summary.slice(0, 60) + "..."
-        : node.label;
+      const labelText = isDraft
+        ? "Analyzing..."
+        : isHovered && node.summary
+          ? node.summary.slice(0, 60) + "..."
+          : node.label;
       const sprite = new SpriteText(labelText, isHovered ? 3 : 2, "white");
       sprite.fontFace = "Space Grotesk, sans-serif";
       sprite.fontWeight = "600";
@@ -249,6 +334,8 @@ export default function FlareGraphInner({ flares, newFlareIds }: Props) {
       backgroundColor="#000011"
       showNavInfo={false}
       enableNodeDrag={false}
+      cooldownTicks={0}
+      warmupTicks={0}
     />
   );
 }

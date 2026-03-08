@@ -2,7 +2,7 @@ export const CLUSTER_COLORS: Record<number, string> = {
   0: "#FF6B6B",  // Caffeine / Sleep — red
   1: "#4ECDC4",  // FODMAP — teal
   2: "#FFE66D",  // Stress / Gut-Brain — yellow
-  [-1]: "#888888", // Noise / unassigned — grey
+  [-1]: "#C084FC", // Noise / unassigned — purple
 };
 
 export const CLUSTER_LABELS: Record<number, string> = {
