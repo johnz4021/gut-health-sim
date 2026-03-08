@@ -6,12 +6,17 @@ export interface FlareNode {
   color: string;
   confidence: number;
   synthetic: boolean;
+  summary?: string;
+  novel_factors?: string[];
   x?: number;
   y?: number;
   z?: number;
   vx?: number;
   vy?: number;
   vz?: number;
+  fx?: number;
+  fy?: number;
+  fz?: number;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   __threeObj?: any;
 }

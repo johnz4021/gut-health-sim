@@ -5,7 +5,17 @@ import ForceGraph3D from "react-force-graph-3d";
 import SpriteText from "three-spritetext";
 import * as THREE from "three";
 import { FlareNode } from "@/lib/types";
-import { SECTOR_ANGLES, CLUSTER_LABELS, CLUSTER_COLORS } from "@/lib/constants";
+import { CLUSTER_LABELS, CLUSTER_COLORS } from "@/lib/constants";
+
+function getClusterCentroid(clusterId: number, allNodes: FlareNode[]) {
+  const members = allNodes.filter(n => n.clusterId === clusterId);
+  if (members.length === 0) return { x: 0, y: 0, z: 0 };
+  return {
+    x: members.reduce((s, n) => s + (n.fx ?? n.x ?? 0), 0) / members.length,
+    y: members.reduce((s, n) => s + (n.fy ?? n.y ?? 0), 0) / members.length,
+    z: members.reduce((s, n) => s + (n.fz ?? n.z ?? 0), 0) / members.length,
+  };
+}
 
 interface Props {
   flares: FlareNode[];
@@ -39,7 +49,12 @@ export default function FlareGraphInner({ flares, newFlareIds }: Props) {
       if (!fg || setupDoneRef.current) return;
       setupDoneRef.current = true;
 
-      fg.cameraPosition({ x: 0, y: 0, z: 400 });
+      // Point camera at the centroid of all node data
+      const allNodes = flaresRef.current;
+      const cx = allNodes.reduce((s, n) => s + (n.x || 0), 0) / allNodes.length;
+      const cy = allNodes.reduce((s, n) => s + (n.y || 0), 0) / allNodes.length;
+      const cz = allNodes.reduce((s, n) => s + (n.z || 0), 0) / allNodes.length;
+      fg.cameraPosition({ x: cx, y: cy, z: cz + 350 }, { x: cx, y: cy, z: cz }, 0);
 
       const controls = fg.controls();
       if (controls) {
@@ -79,17 +94,14 @@ export default function FlareGraphInner({ flares, newFlareIds }: Props) {
         stars.name = "starField";
         scene.add(stars);
 
-        // Floating cluster labels
+        // Floating cluster labels — placed at actual cluster centroids
         const labelGroup = new THREE.Group();
         labelGroup.name = "clusterLabels";
-        const labelRadius = 150;
         for (const clusterIdStr of Object.keys(CLUSTER_LABELS)) {
           const clusterId = Number(clusterIdStr);
-          const angle = SECTOR_ANGLES[clusterId];
+          const centroid = getClusterCentroid(clusterId, allNodes);
           const label = CLUSTER_LABELS[clusterId];
           const color = CLUSTER_COLORS[clusterId];
-          const x = Math.cos(angle) * labelRadius;
-          const y = Math.sin(angle) * labelRadius;
 
           const sprite = new SpriteText(label, 8, color);
           sprite.fontFace = "Orbitron, sans-serif";
@@ -97,7 +109,8 @@ export default function FlareGraphInner({ flares, newFlareIds }: Props) {
           sprite.backgroundColor = "rgba(0,0,0,0.5)";
           sprite.padding = 6;
           sprite.borderRadius = 4;
-          sprite.position.set(x, y, 0);
+          // Place label above the cluster centroid
+          sprite.position.set(centroid.x, centroid.y + 30, centroid.z);
           sprite.material.depthWrite = false;
           sprite.renderOrder = 999;
           labelGroup.add(sprite);
@@ -105,42 +118,25 @@ export default function FlareGraphInner({ flares, newFlareIds }: Props) {
         scene.add(labelGroup);
       }
 
-      // Clustering force — pulls nodes toward their sector, but weakens
-      // as they approach so charge repulsion can spread them out
-      fg.d3Force("cluster", () => {
-        const targetRadius = 120;
-        const deadZone = 50; // stop pulling once within this distance of center
-        for (const node of flaresRef.current) {
-          if (node.clusterId === -1) continue;
-          const angle = SECTOR_ANGLES[node.clusterId];
-          if (angle === undefined) continue;
-          const targetX = Math.cos(angle) * targetRadius;
-          const targetY = Math.sin(angle) * targetRadius;
-          const dx = targetX - (node.x || 0);
-          const dy = targetY - (node.y || 0);
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          // Only pull if outside the dead zone; strength scales with distance
-          if (dist > deadZone) {
-            const strength = 0.05 * ((dist - deadZone) / dist);
-            node.vx = (node.vx || 0) + dx * strength;
-            node.vy = (node.vy || 0) + dy * strength;
-          }
-          node.vz = (node.vz || 0) + (0 - (node.z || 0)) * 0.02;
+      // Nullify all forces — UMAP coordinates are pre-computed
+      fg.d3Force("charge", null);
+      fg.d3Force("link", null);
+      fg.d3Force("center", null);
+
+      // Pin each node to its preprocessed coordinates
+      for (const node of flaresRef.current) {
+        if (node.x !== null && node.x !== undefined) {
+          node.fx = node.x;
+          node.fy = node.y as number;
+          node.fz = node.z as number;
+        } else {
+          // Live flare with no coordinates — place near cluster centroid
+          const centroid = getClusterCentroid(node.clusterId, flaresRef.current);
+          node.fx = centroid.x + (Math.random() - 0.5) * 20;
+          node.fy = centroid.y + (Math.random() - 0.5) * 20;
+          node.fz = centroid.z + (Math.random() - 0.5) * 10;
         }
-      });
-
-      fg.d3Force("charge")?.strength(-80);
-      fg.d3ReheatSimulation();
-
-      // Freeze forces after settling
-      const timer = setTimeout(() => {
-        fg.d3Force("charge", null);
-        fg.d3Force("cluster", null);
-        fg.d3ReheatSimulation();
-      }, 5000);
-
-      // Store timer for cleanup
-      (graphRef as { current: { _freezeTimer?: ReturnType<typeof setTimeout> } }).current._freezeTimer = timer;
+      }
     });
 
     return () => cancelAnimationFrame(raf);
@@ -191,7 +187,10 @@ export default function FlareGraphInner({ flares, newFlareIds }: Props) {
           (isNew ? 0.2 : 0.1) + Math.sin(phase) * (isNew ? 0.05 : 0.03);
       };
 
-      const sprite = new SpriteText(node.label, 2, "white");
+      const labelText = isHovered && node.summary
+        ? node.summary.slice(0, 60) + "..."
+        : node.label;
+      const sprite = new SpriteText(labelText, isHovered ? 3 : 2, "white");
       sprite.fontFace = "Space Grotesk, sans-serif";
       sprite.fontWeight = "600";
       sprite.backgroundColor = "rgba(0,0,0,0.5)";

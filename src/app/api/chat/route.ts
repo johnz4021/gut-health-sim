@@ -1,155 +1,156 @@
 import { NextResponse } from "next/server";
+import Anthropic from "@anthropic-ai/sdk";
 
-// In-memory session store (mock)
-const sessions = new Map<
-  string,
-  { step: number; symptoms: string[]; context: Record<string, boolean> }
->();
+const client = new Anthropic();
 
-const QUESTIONS = [
-  {
-    reply:
-      "I hear you. Let me ask a few quick questions to narrow down what might be triggering this. Did you have coffee or caffeine before eating today?",
-    state: "QUESTIONING" as const,
-    probs: { A: 0.4, B: 0.35, C: 0.25 },
-    field: "caffeine_before_food",
-  },
-  {
-    reply:
-      "Got it. Did you eat any onion, garlic, or wheat-heavy foods in the last 24 hours?",
-    state: "QUESTIONING" as const,
-    probs_yes: { A: 0.2, B: 0.6, C: 0.2 },
-    probs_no: { A: 0.5, B: 0.15, C: 0.35 },
-    field: "high_fodmap",
-  },
-  {
-    reply_converge_fodmap:
-      "Based on your answers, your symptoms strongly match a FODMAP-sensitive pattern. Many people with this profile find that reducing onion, garlic, and wheat significantly decreases flare-ups. This is backed by Monash University's FODMAP research.",
-    reply_converge_caffeine:
-      "Based on your answers, your symptoms match a caffeine/sleep-sensitive pattern. People with this profile often find that avoiding caffeine on an empty stomach and getting 7+ hours of sleep significantly reduces flare-ups.",
-    reply_converge_stress:
-      "Based on your answers, your symptoms match a stress/gut-brain pattern. The gut-brain axis means high stress and irregular meals can directly trigger IBS symptoms. Regular meal timing and stress management often help.",
-    state: "CONVERGED" as const,
-  },
-];
+type ConversationState = "SYMPTOM_INTAKE" | "QUESTIONING" | "CONVERGED";
 
-function detectYes(msg: string): boolean {
-  const lower = msg.toLowerCase();
-  return (
-    lower.includes("yes") ||
-    lower.includes("yeah") ||
-    lower.includes("yep") ||
-    lower.includes("i did") ||
-    lower.includes("definitely")
-  );
+interface Session {
+  state: ConversationState;
+  symptoms: string[];
+  context: Record<string, unknown>;
+  phenotype_probs: Record<string, number>;
+  questions_asked: string[];
+  history: Array<{ role: "user" | "assistant"; content: string }>;
+}
+
+const sessions = new Map<string, Session>();
+
+const PHENOTYPE_DEFINITIONS = `
+PHENOTYPE A — Caffeine/Sleep-Sensitive IBS
+  Key discriminators: caffeine_before_food=true, sleep_hours<6
+  Symptoms: urgency, bloating
+  Scientific basis: caffeine stimulates colonic motility; sleep deprivation elevates cortisol
+
+PHENOTYPE B — FODMAP-Sensitive IBS
+  Key discriminators: high fodmap foods (onion, garlic, wheat, lactose, fructose)
+  Symptoms: bloating, cramping, gas, distension
+  Scientific basis: Monash University FODMAP research, fermentation by gut bacteria
+
+PHENOTYPE C — Stress/Gut-Brain IBS
+  Key discriminators: stress_level>3, meal_skipped=true, anxiety high
+  Symptoms: pain, diarrhea, nausea
+  Scientific basis: HPA axis — cortisol directly affects gut motility
+`;
+
+function buildSystemPrompt(session: Session): string {
+  return `You are GutMap, an AI investigating IBS flare-up triggers using Bayesian hypothesis testing.
+
+${PHENOTYPE_DEFINITIONS}
+
+CURRENT SESSION STATE:
+- Symptoms reported: ${session.symptoms.join(", ") || "none yet"}
+- Context collected: ${JSON.stringify(session.context)}
+- Phenotype probabilities: ${JSON.stringify(session.phenotype_probs)}
+- Questions already asked: ${session.questions_asked.join("; ") || "none"}
+- State: ${session.state}
+
+RULES:
+1. In SYMPTOM_INTAKE state: parse symptoms from the user's message, set initial phenotype probs, transition to QUESTIONING, ask the first discriminating question
+2. In QUESTIONING state: ask ONE targeted yes/no question that best discriminates between the top 2 phenotype candidates. Never repeat a question already asked. Update probs mentally based on prior answers.
+3. CONVERGE when top phenotype probability would exceed 0.70 after this round (max 4 questions)
+4. Keep responses SHORT — 1-2 sentences max. This is a chat interface.
+5. Be warm and conversational, not clinical.
+
+RESPONSE FORMAT — respond with ONLY this JSON:
+{
+  "reply": "your message to the user",
+  "state": "SYMPTOM_INTAKE | QUESTIONING | CONVERGED",
+  "phenotype_probs": {"A": 0.0, "B": 0.0, "C": 0.0},
+  "converged": false,
+  "phenotype_match": null,
+  "context_update": {},
+  "question_field": "field name you just asked about or null"
+}
+
+If converged=true, phenotype_match must be:
+{
+  "label": "FODMAP-Sensitive IBS | Caffeine/Sleep-Sensitive IBS | Stress/Gut-Brain IBS",
+  "confidence": 0.0,
+  "triggers": [],
+  "population_pct": 0.0
+}`;
 }
 
 export async function POST(request: Request) {
   const { session_id, message } = await request.json();
 
   if (!sessions.has(session_id)) {
-    sessions.set(session_id, { step: 0, symptoms: [], context: {} });
+    sessions.set(session_id, {
+      state: "SYMPTOM_INTAKE",
+      symptoms: [],
+      context: {},
+      phenotype_probs: { A: 0.33, B: 0.33, C: 0.34 },
+      questions_asked: [],
+      history: [],
+    });
   }
 
   const session = sessions.get(session_id)!;
-  const step = session.step;
 
-  // Step 0: initial symptom intake → ask first question
-  if (step === 0) {
-    // Parse symptoms from message
-    const symptomKeywords = [
-      "bloating",
-      "cramping",
-      "urgency",
-      "pain",
-      "diarrhea",
-      "nausea",
-      "gas",
-    ];
-    session.symptoms = symptomKeywords.filter((s) =>
-      message.toLowerCase().includes(s)
-    );
-    session.step = 1;
-
+  if (session.state === "CONVERGED") {
     return NextResponse.json({
-      reply: QUESTIONS[0].reply,
-      state: QUESTIONS[0].state,
-      phenotype_probs: QUESTIONS[0].probs,
-      converged: false,
+      reply: "Your session is complete. Refresh to investigate a new flare.",
+      state: "CONVERGED",
+      phenotype_probs: session.phenotype_probs,
+      converged: true,
       phenotype_match: null,
     });
   }
 
-  // Step 1: answer to caffeine question → ask FODMAP question
-  if (step === 1) {
-    const yes = detectYes(message);
-    session.context.caffeine_before_food = yes;
-    session.step = 2;
+  // Add user message to history
+  session.history.push({ role: "user", content: message });
 
-    const q = QUESTIONS[1];
-    const probs = yes ? q.probs_yes! : q.probs_no!;
+  // Call Claude
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 500,
+    system: buildSystemPrompt(session),
+    messages: session.history,
+  });
 
-    return NextResponse.json({
-      reply: q.reply,
-      state: q.state,
-      phenotype_probs: probs,
+  const rawText = response.content[0].type === "text" ? response.content[0].text : "";
+
+  let parsed;
+  try {
+    const clean = rawText.replace(/```json|```/g, "").trim();
+    parsed = JSON.parse(clean);
+  } catch {
+    parsed = {
+      reply: "Sorry, something went wrong. Could you describe your symptoms again?",
+      state: session.state,
+      phenotype_probs: session.phenotype_probs,
       converged: false,
       phenotype_match: null,
-    });
-  }
-
-  // Step 2: answer to FODMAP question → converge
-  if (step === 2) {
-    const yes = detectYes(message);
-    session.context.high_fodmap = yes;
-    session.step = 3;
-
-    // Determine phenotype based on answers
-    let phenotype: { label: string; confidence: number; triggers: string[]; population_pct: number; clusterId: number };
-    let reply: string;
-    let probs: Record<string, number>;
-
-    if (yes) {
-      // FODMAP path
-      phenotype = {
-        label: "FODMAP-Sensitive IBS",
-        confidence: 0.78,
-        triggers: ["onion", "garlic", "wheat"],
-        population_pct: 0.22,
-        clusterId: 1,
-      };
-      reply = QUESTIONS[2].reply_converge_fodmap!;
-      probs = { A: 0.1, B: 0.78, C: 0.12 };
-    } else if (session.context.caffeine_before_food) {
-      // Caffeine path
-      phenotype = {
-        label: "Caffeine/Sleep-Sensitive IBS",
-        confidence: 0.74,
-        triggers: ["caffeine before food", "sleep < 6hrs"],
-        population_pct: 0.18,
-        clusterId: 0,
-      };
-      reply = QUESTIONS[2].reply_converge_caffeine!;
-      probs = { A: 0.74, B: 0.1, C: 0.16 };
-    } else {
-      // Stress path
-      phenotype = {
-        label: "Stress/Gut-Brain IBS",
-        confidence: 0.71,
-        triggers: ["high stress", "irregular meals"],
-        population_pct: 0.15,
-        clusterId: 2,
-      };
-      reply = QUESTIONS[2].reply_converge_stress!;
-      probs = { A: 0.12, B: 0.15, C: 0.73 };
-    }
-
-    // Add new flare to the graph via internal POST
-    const CLUSTER_COLORS: Record<number, string> = {
-      0: "#FF6B6B",
-      1: "#4ECDC4",
-      2: "#FFE66D",
+      context_update: {},
+      question_field: null,
     };
+  }
+
+  // Update session state
+  session.state = parsed.state;
+  session.phenotype_probs = parsed.phenotype_probs || session.phenotype_probs;
+  if (parsed.context_update) {
+    session.context = { ...session.context, ...parsed.context_update };
+  }
+  if (parsed.question_field) {
+    session.questions_asked.push(parsed.question_field);
+  }
+
+  // Add assistant reply to history
+  session.history.push({ role: "assistant", content: parsed.reply });
+
+  // If converged, add flare to graph
+  if (parsed.converged && parsed.phenotype_match) {
+    const CLUSTER_IDS: Record<string, number> = {
+      "Caffeine/Sleep-Sensitive IBS": 0,
+      "FODMAP-Sensitive IBS": 1,
+      "Stress/Gut-Brain IBS": 2,
+    };
+    const CLUSTER_COLORS: Record<number, string> = {
+      0: "#FF6B6B", 1: "#4ECDC4", 2: "#FFE66D",
+    };
+    const clusterId = CLUSTER_IDS[parsed.phenotype_match.label] ?? -1;
 
     try {
       const origin = process.env.VERCEL_URL
@@ -159,39 +160,29 @@ export async function POST(request: Request) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          id: `flare-${session_id}`,
-          label: session.symptoms.slice(0, 2).join(" + ") || "flare",
+          id: `live-${session_id}-${Date.now()}`,
+          label: session.symptoms.slice(0, 2).join(" + ") || "new flare",
           symptoms: session.symptoms,
-          clusterId: phenotype.clusterId,
-          color: CLUSTER_COLORS[phenotype.clusterId],
-          confidence: phenotype.confidence,
+          clusterId,
+          color: CLUSTER_COLORS[clusterId],
+          confidence: parsed.phenotype_match.confidence,
           synthetic: false,
+          summary: `Live session: ${parsed.phenotype_match.label}`,
+          novel_factors: [],
+          // Coordinates will be null — frontend places near cluster centroid
+          x: null, y: null, z: null,
         }),
       });
     } catch {
-      // ignore fetch errors in mock
+      // non-fatal
     }
-
-    return NextResponse.json({
-      reply,
-      state: "CONVERGED",
-      phenotype_probs: probs,
-      converged: true,
-      phenotype_match: {
-        label: phenotype.label,
-        confidence: phenotype.confidence,
-        triggers: phenotype.triggers,
-        population_pct: phenotype.population_pct,
-      },
-    });
   }
 
-  // Already converged
   return NextResponse.json({
-    reply: "Your session is complete. Start a new session to investigate another flare-up.",
-    state: "CONVERGED",
-    phenotype_probs: {},
-    converged: true,
-    phenotype_match: null,
+    reply: parsed.reply,
+    state: parsed.state,
+    phenotype_probs: parsed.phenotype_probs,
+    converged: parsed.converged,
+    phenotype_match: parsed.phenotype_match,
   });
 }
