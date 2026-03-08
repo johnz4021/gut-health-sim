@@ -12,6 +12,35 @@ export interface SensitivityProfile {
   triggers: string[];
 }
 
+export interface UserBackground {
+  age_range?: string;
+  sex?: string;
+  ibs_subtype?: string;
+  diagnosed?: boolean;
+  onset_period?: string;
+  known_triggers?: string[];
+}
+
+export interface UserProfileSummary {
+  user_id: string;
+  flare_count: number;
+  has_background: boolean;
+  background?: UserBackground;
+}
+
+export interface ClusterMetadata {
+  label: string;
+  color: string;
+  description: string;
+  size: number;
+  centroid_features?: Record<string, number>;
+}
+
+export interface FlaresResponse {
+  flares: FlareNode[];
+  cluster_metadata: Record<string, ClusterMetadata>;
+}
+
 export interface FlareNode {
   id: string;
   label: string;
@@ -23,6 +52,8 @@ export interface FlareNode {
   summary?: string;
   novel_factors?: string[];
   axis_scores?: AxisScores;
+  user_id?: string;
+  created_at?: string;
   x?: number;
   y?: number;
   z?: number;
@@ -45,7 +76,7 @@ export interface ChatMessage {
 
 export interface ChatResponse {
   reply: string;
-  state: "SYMPTOM_INTAKE" | "QUESTIONING" | "CONVERGED";
+  state: "SYMPTOM_INTAKE" | "QUESTIONING" | "ONBOARDING" | "CONVERGED";
   axis_scores: AxisScores;
   converged: boolean;
   sensitivity_profile: SensitivityProfile | null;

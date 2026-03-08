@@ -2,7 +2,7 @@
 
 import { useRef, useState, useEffect } from "react";
 import dynamic from "next/dynamic";
-import { FlareNode, AxisScores } from "@/lib/types";
+import { FlareNode, AxisScores, ClusterMetadata } from "@/lib/types";
 
 const FlareGraphInner = dynamic(() => import("./FlareGraphInner"), {
   ssr: false,
@@ -13,6 +13,7 @@ interface Props {
   newFlareIds: Set<string>;
   draftNodeId: string | null;
   axisScores: AxisScores;
+  clusterMetadata: Record<string, ClusterMetadata>;
 }
 
 export default function FlareGraph(props: Props) {

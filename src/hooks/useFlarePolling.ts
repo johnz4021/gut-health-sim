@@ -1,21 +1,28 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { FlareNode } from "@/lib/types";
+import { FlareNode, ClusterMetadata } from "@/lib/types";
 import { fetchFlares } from "@/lib/api";
 
 export function useFlarePolling(intervalMs = 2000) {
   const [flares, setFlares] = useState<FlareNode[]>([]);
   const [newFlareIds, setNewFlareIds] = useState<Set<string>>(new Set());
+  const [clusterMetadata, setClusterMetadata] = useState<Record<string, ClusterMetadata>>({});
   const knownIdsRef = useRef<Set<string>>(new Set());
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isFirstPollRef = useRef(true);
 
   const poll = useCallback(async () => {
     try {
-      const data = await fetchFlares();
+      const response = await fetchFlares();
+      const data = response.flares;
+      const meta = response.cluster_metadata;
       const isFirst = isFirstPollRef.current;
       isFirstPollRef.current = false;
+
+      if (meta) {
+        setClusterMetadata(meta);
+      }
 
       const incoming = new Set<string>();
 
@@ -53,5 +60,5 @@ export function useFlarePolling(intervalMs = 2000) {
     };
   }, [poll, intervalMs]);
 
-  return { flares, newFlareIds };
+  return { flares, newFlareIds, clusterMetadata };
 }

@@ -6,7 +6,7 @@ import FlareGraph from "@/components/FlareGraph";
 import { useFlarePolling } from "@/hooks/useFlarePolling";
 import { createSession, sendMessage } from "@/lib/api";
 import { ChatMessage, AxisScores, SensitivityProfile, FlareNode } from "@/lib/types";
-import { CLUSTER_COLORS } from "@/lib/constants";
+import { DEFAULT_NOISE_COLOR } from "@/lib/constants";
 
 const DEFAULT_AXIS_SCORES: AxisScores = {
   fodmap: 0.5,
@@ -16,18 +16,31 @@ const DEFAULT_AXIS_SCORES: AxisScores = {
 
 const DRAFT_NODE_ID = "__draft__";
 
+function getOrCreateUserId(): string {
+  if (typeof window === "undefined") return "";
+  let id = localStorage.getItem("gutmap_user_id");
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem("gutmap_user_id", id);
+  }
+  return id;
+}
+
 export default function Home() {
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string>("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [axisScores, setAxisScores] = useState<AxisScores>(DEFAULT_AXIS_SCORES);
   const [converged, setConverged] = useState(false);
-  const [chatState, setChatState] = useState<"SYMPTOM_INTAKE" | "QUESTIONING" | "CONVERGED">("SYMPTOM_INTAKE");
+  const [chatState, setChatState] = useState<"SYMPTOM_INTAKE" | "QUESTIONING" | "ONBOARDING" | "CONVERGED">("SYMPTOM_INTAKE");
   const [sensitivityProfile, setSensitivityProfile] = useState<SensitivityProfile | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [, setFlareCount] = useState(0);
+  const [, setHasBackground] = useState(false);
 
-  const { flares, newFlareIds } = useFlarePolling(2000);
+  const { flares, newFlareIds, clusterMetadata } = useFlarePolling(2000);
 
-  const draftActive = chatState !== "SYMPTOM_INTAKE" && !converged;
+  const draftActive = chatState !== "SYMPTOM_INTAKE" && chatState !== "ONBOARDING" && !converged;
   const draftNodeRef = useRef<FlareNode | null>(null);
 
   // Create/destroy draft node synchronously so it's available for useMemo
@@ -37,7 +50,7 @@ export default function Home() {
       label: "Analyzing...",
       symptoms: [],
       clusterId: -1,
-      color: CLUSTER_COLORS[-1],
+      color: DEFAULT_NOISE_COLOR,
       confidence: 0,
       synthetic: false,
     };
@@ -56,7 +69,13 @@ export default function Home() {
   useEffect(() => {
     if (sessionCreatedRef.current) return;
     sessionCreatedRef.current = true;
-    createSession().then(({ session_id }) => setSessionId(session_id));
+    const uid = getOrCreateUserId();
+    setUserId(uid);
+    createSession(uid).then((res) => {
+      setSessionId(res.session_id);
+      if (res.flare_count !== undefined) setFlareCount(res.flare_count);
+      if (res.has_background !== undefined) setHasBackground(res.has_background);
+    });
   }, []);
 
   const handleSend = useCallback(
@@ -74,7 +93,7 @@ export default function Home() {
       setIsLoading(true);
 
       try {
-        const response = await sendMessage(sessionId, content);
+        const response = await sendMessage(sessionId, content, userId);
 
         // Add assistant message
         const assistantMsg: ChatMessage = {
@@ -110,7 +129,7 @@ export default function Home() {
         setIsLoading(false);
       }
     },
-    [sessionId, converged]
+    [sessionId, converged, userId]
   );
 
   return (
@@ -133,6 +152,7 @@ export default function Home() {
           newFlareIds={newFlareIds}
           draftNodeId={draftActive && !converged ? DRAFT_NODE_ID : null}
           axisScores={axisScores}
+          clusterMetadata={clusterMetadata}
         />
       </div>
     </main>

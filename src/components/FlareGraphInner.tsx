@@ -4,27 +4,70 @@ import { useRef, useEffect, useCallback, useMemo } from "react";
 import ForceGraph3D from "react-force-graph-3d";
 import SpriteText from "three-spritetext";
 import * as THREE from "three";
-import { FlareNode, AxisScores } from "@/lib/types";
-import { CLUSTER_LABELS, CLUSTER_COLORS } from "@/lib/constants";
+import { FlareNode, AxisScores, ClusterMetadata } from "@/lib/types";
+import { DEFAULT_NOISE_COLOR } from "@/lib/constants";
 
-const AXIS_TO_CLUSTER: Record<string, number> = {
-  caffeine_sleep: 0,
-  fodmap: 1,
-  stress_gut: 2,
+// Axis keys used to score clusters against current axis scores
+const AXIS_FEATURE_MAP: Record<string, string[]> = {
+  caffeine_sleep: ["caffeine_before_food", "caffeine_x_sleep"],
+  fodmap: ["fodmap_load", "stress_x_fodmap", "anxiety_x_fodmap"],
+  stress_gut: ["stress_level", "anxiety_level", "stress_x_fodmap"],
 };
 
-function getDraftTarget(scores: AxisScores, allNodes: FlareNode[]): { x: number; y: number; z: number } {
-  let maxAxis = "fodmap";
-  let maxScore = 0;
-  for (const [axis, score] of Object.entries(scores)) {
-    if (score > maxScore) {
-      maxScore = score;
-      maxAxis = axis;
+function getDraftTarget(
+  scores: AxisScores,
+  allNodes: FlareNode[],
+  clusterMeta: Record<string, ClusterMetadata>
+): { x: number; y: number; z: number } {
+  const realNodes = allNodes.filter((n) => n.id !== "__draft__");
+
+  // Score each cluster by how well its centroid features match the current axis scores
+  let bestCluster = -1;
+  let bestScore = -Infinity;
+
+  for (const [clusterIdStr, meta] of Object.entries(clusterMeta)) {
+    const clusterId = Number(clusterIdStr);
+    if (clusterId === -1) continue;
+
+    if (meta.centroid_features && Object.keys(meta.centroid_features).length > 0) {
+      // Score using centroid features
+      let score = 0;
+      for (const [axis, axisScore] of Object.entries(scores)) {
+        const featureKeys = AXIS_FEATURE_MAP[axis] || [];
+        for (const fk of featureKeys) {
+          score += (meta.centroid_features[fk] ?? 0) * axisScore;
+        }
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        bestCluster = clusterId;
+      }
+    } else {
+      // Fallback: compute average axis_scores per cluster from flare data
+      const members = realNodes.filter(n => n.clusterId === clusterId && n.axis_scores);
+      if (members.length === 0) continue;
+      let score = 0;
+      for (const [axis, axisScore] of Object.entries(scores)) {
+        const avgClusterScore = members.reduce((s, n) => s + ((n.axis_scores as unknown as Record<string, number>)?.[axis] ?? 0), 0) / members.length;
+        score += avgClusterScore * axisScore;
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        bestCluster = clusterId;
+      }
     }
   }
-  const clusterId = AXIS_TO_CLUSTER[maxAxis] ?? 1;
-  const realNodes = allNodes.filter((n) => n.id !== "__draft__");
-  return getClusterCentroid(clusterId, realNodes);
+
+  if (bestCluster === -1) {
+    // Ultimate fallback: pick cluster with most members
+    const counts: Record<number, number> = {};
+    for (const n of realNodes) {
+      counts[n.clusterId] = (counts[n.clusterId] || 0) + 1;
+    }
+    bestCluster = Number(Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 0);
+  }
+
+  return getClusterCentroid(bestCluster, realNodes);
 }
 
 function getClusterCentroid(clusterId: number, allNodes: FlareNode[]) {
@@ -42,11 +85,12 @@ interface Props {
   newFlareIds: Set<string>;
   draftNodeId: string | null;
   axisScores: AxisScores;
+  clusterMetadata: Record<string, ClusterMetadata>;
   width: number;
   height: number;
 }
 
-export default function FlareGraphInner({ flares, newFlareIds, draftNodeId, axisScores, width, height }: Props) {
+export default function FlareGraphInner({ flares, newFlareIds, draftNodeId, axisScores, clusterMetadata, width, height }: Props) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const graphRef = useRef<any>(null);
   const newFlareIdsRef = useRef<Set<string>>(newFlareIds);
@@ -55,11 +99,13 @@ export default function FlareGraphInner({ flares, newFlareIds, draftNodeId, axis
   const flaresRef = useRef<FlareNode[]>(flares);
   const draftNodeIdRef = useRef(draftNodeId);
   const axisScoresRef = useRef(axisScores);
+  const clusterMetadataRef = useRef(clusterMetadata);
 
   newFlareIdsRef.current = newFlareIds;
   flaresRef.current = flares;
   draftNodeIdRef.current = draftNodeId;
   axisScoresRef.current = axisScores;
+  clusterMetadataRef.current = clusterMetadata;
 
   // Pre-pin nodes before ForceGraph3D sees them — prevents d3-force race condition
   const SPREAD = 3;
@@ -164,14 +210,16 @@ export default function FlareGraphInner({ flares, newFlareIds, draftNodeId, axis
         stars.name = "starField";
         scene.add(stars);
 
-        // Floating cluster labels — placed at actual cluster centroids
+        // Floating cluster labels — placed at actual cluster centroids (dynamic from metadata)
         const labelGroup = new THREE.Group();
         labelGroup.name = "clusterLabels";
-        for (const clusterIdStr of Object.keys(CLUSTER_LABELS)) {
+        const meta = clusterMetadataRef.current;
+        for (const [clusterIdStr, clusterMeta] of Object.entries(meta)) {
           const clusterId = Number(clusterIdStr);
+          if (clusterId === -1) continue; // skip noise label
           const centroid = getClusterCentroid(clusterId, allNodes);
-          const label = CLUSTER_LABELS[clusterId];
-          const color = CLUSTER_COLORS[clusterId];
+          const label = clusterMeta.label;
+          const color = clusterMeta.color;
 
           const sprite = new SpriteText(label, 10, color);
           sprite.fontFace = "Orbitron, sans-serif";
@@ -186,6 +234,44 @@ export default function FlareGraphInner({ flares, newFlareIds, draftNodeId, axis
           labelGroup.add(sprite);
         }
         scene.add(labelGroup);
+
+        // Trajectory lines — connect flares from same user_id in chronological order
+        const userFlares: Record<string, FlareNode[]> = {};
+        for (const node of allNodes) {
+          if (node.user_id && node.created_at && node.id !== "__draft__") {
+            if (!userFlares[node.user_id]) userFlares[node.user_id] = [];
+            userFlares[node.user_id].push(node);
+          }
+        }
+
+        const trajectoryGroup = new THREE.Group();
+        trajectoryGroup.name = "trajectoryLines";
+        for (const [, nodes] of Object.entries(userFlares)) {
+          if (nodes.length < 2) continue;
+          nodes.sort((a, b) => (a.created_at ?? "").localeCompare(b.created_at ?? ""));
+
+          // Color: use dominant cluster's color
+          const clusterCounts: Record<number, number> = {};
+          for (const n of nodes) {
+            clusterCounts[n.clusterId] = (clusterCounts[n.clusterId] || 0) + 1;
+          }
+          const dominantCluster = Number(Object.entries(clusterCounts).sort((a, b) => b[1] - a[1])[0][0]);
+          const lineColor = meta[String(dominantCluster)]?.color ?? DEFAULT_NOISE_COLOR;
+
+          const points = nodes.map(n => new THREE.Vector3(n.fx ?? n.x ?? 0, n.fy ?? n.y ?? 0, n.fz ?? n.z ?? 0));
+          const geometry = new THREE.BufferGeometry().setFromPoints(points);
+          const material = new THREE.LineDashedMaterial({
+            color: lineColor,
+            dashSize: 5,
+            gapSize: 3,
+            opacity: 0.6,
+            transparent: true,
+          });
+          const line = new THREE.Line(geometry, material);
+          line.computeLineDistances();
+          trajectoryGroup.add(line);
+        }
+        scene.add(trajectoryGroup);
       }
 
     });
@@ -203,7 +289,7 @@ export default function FlareGraphInner({ flares, newFlareIds, draftNodeId, axis
     const animate = () => {
       const draft = flaresRef.current.find((n) => n.id === draftNodeIdRef.current);
       if (!draft || !draftNodeIdRef.current) return;
-      const target = getDraftTarget(axisScoresRef.current, flaresRef.current);
+      const target = getDraftTarget(axisScoresRef.current, flaresRef.current, clusterMetadataRef.current);
       const LERP = 0.03;
       draft.fx = (draft.fx ?? 0) + (target.x - (draft.fx ?? 0)) * LERP;
       draft.fy = (draft.fy ?? 0) + (target.y - (draft.fy ?? 0)) * LERP;
@@ -264,15 +350,20 @@ export default function FlareGraphInner({ flares, newFlareIds, draftNodeId, axis
       const isDraft = node.id === draftNodeIdRef.current;
       const isHovered = hoveredNodeRef.current === node.id;
 
+      // Dynamic color from cluster metadata
+      const nodeColor = isDraft
+        ? DEFAULT_NOISE_COLOR
+        : clusterMetadataRef.current[String(node.clusterId)]?.color ?? node.color;
+
       const sphereSize = 3;
       const geometry = new THREE.SphereGeometry(sphereSize, 32, 32);
       const material = new THREE.MeshStandardMaterial({
-        color: isDraft ? "#C084FC" : node.color,
+        color: isDraft ? DEFAULT_NOISE_COLOR : nodeColor,
         metalness: 0.3,
         roughness: isDraft ? 0.2 : 0.4,
         transparent: true,
         opacity: 0.9,
-        emissive: new THREE.Color(isDraft ? "#C084FC" : isNew ? "#FFD700" : node.color),
+        emissive: new THREE.Color(isDraft ? DEFAULT_NOISE_COLOR : isNew ? "#FFD700" : nodeColor),
         emissiveIntensity: isDraft ? 1.0 : isNew ? 0.8 : 0.15,
       });
       const sphere = new THREE.Mesh(geometry, material);
@@ -281,7 +372,7 @@ export default function FlareGraphInner({ flares, newFlareIds, draftNodeId, axis
       const glowSize = sphereSize * (isDraft ? 3 : isNew ? 2.5 : 1.8);
       const glowGeo = new THREE.SphereGeometry(glowSize, 24, 24);
       const glowMat = new THREE.MeshBasicMaterial({
-        color: new THREE.Color(isDraft ? "#C084FC" : isNew ? "#FFD700" : node.color),
+        color: new THREE.Color(isDraft ? DEFAULT_NOISE_COLOR : isNew ? "#FFD700" : nodeColor),
         transparent: true,
         opacity: isDraft ? 0.25 : isNew ? 0.2 : 0.1,
         blending: THREE.AdditiveBlending,

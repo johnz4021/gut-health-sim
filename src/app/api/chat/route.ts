@@ -1,9 +1,25 @@
 import { NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import fs from "fs";
+import path from "path";
+import { getOrCreateUser, updateBackground, addFlare, getUserSummary } from "@/lib/userStore";
 
 const client = new Anthropic();
 
-type ConversationState = "SYMPTOM_INTAKE" | "QUESTIONING" | "CONVERGED";
+// Cache cluster metadata at module level
+let clusterMetadataCache: Record<string, { label: string; color: string; description: string; size: number; centroid_features?: Record<string, number> }> | null = null;
+function loadClusterMetadata() {
+  if (clusterMetadataCache) return clusterMetadataCache;
+  const metaPath = path.join(process.cwd(), "public/cluster_metadata.json");
+  if (fs.existsSync(metaPath)) {
+    clusterMetadataCache = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+  } else {
+    clusterMetadataCache = {};
+  }
+  return clusterMetadataCache!;
+}
+
+type ConversationState = "ONBOARDING" | "SYMPTOM_INTAKE" | "QUESTIONING" | "CONVERGED";
 
 interface AxisScores {
   fodmap: number;
@@ -13,6 +29,7 @@ interface AxisScores {
 
 interface Session {
   state: ConversationState;
+  user_id?: string;
   symptoms: string[];
   context: Record<string, unknown>;
   axis_scores: AxisScores;
@@ -48,9 +65,56 @@ CROSS-AXIS INTERACTIONS (important!):
 `;
 
 function buildSystemPrompt(session: Session): string {
+  // Build background context if user has one
+  let backgroundContext = "";
+  if (session.user_id) {
+    const summary = getUserSummary(session.user_id);
+    if (summary.has_background && summary.background) {
+      const bg = summary.background;
+      backgroundContext = `\nPATIENT BACKGROUND:
+- Age range: ${bg.age_range || "unknown"}
+- Sex: ${bg.sex || "unknown"}
+- IBS subtype: ${bg.ibs_subtype || "unknown"}
+- Diagnosed: ${bg.diagnosed ? "yes" : "no"}
+- Onset period: ${bg.onset_period || "unknown"}
+- Known triggers: ${bg.known_triggers?.join(", ") || "none specified"}`;
+    }
+    if (summary.flare_count > 0) {
+      backgroundContext += `\n- Previous flares: ${summary.flare_count} total`;
+    }
+  }
+
+  if (session.state === "ONBOARDING") {
+    return `You are GutMap, an AI investigating IBS flare-up triggers. You are in ONBOARDING mode — getting to know a new user.
+
+Ask conversational questions to learn about them. You need: age range, sex, IBS subtype (IBS-D/C/M/U or unsure), whether they've been diagnosed, how long they've had symptoms, and any known triggers.
+
+Ask 2-3 questions in a warm, friendly way. Don't be clinical. After you have enough info, set background_complete=true.
+
+RESPONSE FORMAT — respond with ONLY this JSON:
+{
+  "reply": "your conversational message",
+  "state": "ONBOARDING",
+  "axis_scores": {"fodmap": 0.5, "stress_gut": 0.5, "caffeine_sleep": 0.5},
+  "converged": false,
+  "sensitivity_profile": null,
+  "symptoms": [],
+  "context_update": {},
+  "question_field": null,
+  "background_update": null,
+  "background_complete": false
+}
+
+When you have gathered enough background info, set:
+- "background_update": {"age_range": "...", "sex": "...", "ibs_subtype": "...", "diagnosed": true/false, "onset_period": "...", "known_triggers": ["..."]}
+- "background_complete": true
+- "state": "SYMPTOM_INTAKE"`;
+  }
+
   return `You are GutMap, an AI investigating IBS flare-up triggers using independent sensitivity axis scoring.
 
 ${SENSITIVITY_AXES}
+${backgroundContext}
 
 CURRENT SESSION STATE:
 - Symptoms reported: ${session.symptoms.join(", ") || "none yet"}
@@ -90,11 +154,21 @@ If converged=true, sensitivity_profile must be:
 }
 
 export async function POST(request: Request) {
-  const { session_id, message } = await request.json();
+  const { session_id, message, user_id } = await request.json();
 
   if (!sessions.has(session_id)) {
+    // Determine initial state — ONBOARDING for new users without background
+    let initialState: ConversationState = "SYMPTOM_INTAKE";
+    if (user_id) {
+      const userProfile = getOrCreateUser(user_id);
+      if (!userProfile.background) {
+        initialState = "ONBOARDING";
+      }
+    }
+
     sessions.set(session_id, {
-      state: "SYMPTOM_INTAKE",
+      state: initialState,
+      user_id,
       symptoms: [],
       context: {},
       axis_scores: { fodmap: 0.5, stress_gut: 0.5, caffeine_sleep: 0.5 },
@@ -157,32 +231,79 @@ export async function POST(request: Request) {
     session.questions_asked.push(parsed.question_field);
   }
 
+  // Handle ONBOARDING → background update
+  if (parsed.background_complete && parsed.background_update && session.user_id) {
+    updateBackground(session.user_id, parsed.background_update);
+    session.state = "SYMPTOM_INTAKE";
+    parsed.state = "SYMPTOM_INTAKE";
+  }
+
   // Add assistant reply to history
   session.history.push({ role: "assistant", content: parsed.reply });
 
   // If converged, add flare to graph
   if (parsed.converged && parsed.sensitivity_profile) {
-    // Map highest axis score → clusterId
     const scores = parsed.sensitivity_profile.axis_scores || parsed.axis_scores;
-    const AXIS_TO_CLUSTER: Record<string, number> = {
-      fodmap: 1,
-      stress_gut: 2,
-      caffeine_sleep: 0,
-    };
-    const CLUSTER_COLORS: Record<number, string> = {
-      0: "#FF6B6B", 1: "#4ECDC4", 2: "#FFE66D",
+    const meta = loadClusterMetadata();
+
+    // Score each cluster's centroid_features against axis scores to find best match
+    let bestCluster = -1;
+    let bestScore = -Infinity;
+    const AXIS_FEATURE_MAP: Record<string, string[]> = {
+      caffeine_sleep: ["caffeine_before_food", "caffeine_x_sleep"],
+      fodmap: ["fodmap_load", "stress_x_fodmap", "anxiety_x_fodmap"],
+      stress_gut: ["stress_level", "anxiety_level", "stress_x_fodmap"],
     };
 
-    // Find highest axis
-    let maxAxis = "fodmap";
-    let maxScore = 0;
-    for (const [axis, score] of Object.entries(scores)) {
-      if ((score as number) > maxScore) {
-        maxScore = score as number;
-        maxAxis = axis;
+    for (const [clusterIdStr, clusterMeta] of Object.entries(meta)) {
+      const cid = Number(clusterIdStr);
+      if (cid === -1) continue;
+      const cf = clusterMeta.centroid_features;
+      if (!cf) continue;
+
+      let score = 0;
+      for (const [axis, axisScore] of Object.entries(scores)) {
+        const featureKeys = AXIS_FEATURE_MAP[axis] || [];
+        for (const fk of featureKeys) {
+          score += (cf[fk] ?? 0) * (axisScore as number);
+        }
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        bestCluster = cid;
       }
     }
-    const clusterId = AXIS_TO_CLUSTER[maxAxis] ?? -1;
+
+    // Fallback: hardcoded mapping if no cluster metadata
+    if (bestCluster === -1) {
+      const AXIS_TO_CLUSTER: Record<string, number> = { fodmap: 1, stress_gut: 2, caffeine_sleep: 0 };
+      let maxAxis = "fodmap";
+      let maxVal = 0;
+      for (const [axis, score] of Object.entries(scores)) {
+        if ((score as number) > maxVal) { maxVal = score as number; maxAxis = axis; }
+      }
+      bestCluster = AXIS_TO_CLUSTER[maxAxis] ?? -1;
+    }
+
+    const clusterColor = meta[String(bestCluster)]?.color ?? "#888888";
+    const flareId = `live-${session_id}-${Date.now()}`;
+    const createdAt = new Date().toISOString();
+
+    const flareNode = {
+      id: flareId,
+      label: session.symptoms.slice(0, 2).join(" + ") || "new flare",
+      symptoms: session.symptoms,
+      clusterId: bestCluster,
+      color: clusterColor,
+      confidence: parsed.sensitivity_profile.confidence,
+      synthetic: false,
+      summary: `Live session: ${parsed.sensitivity_profile.primary_trigger}`,
+      novel_factors: [],
+      axis_scores: scores,
+      user_id: session.user_id,
+      created_at: createdAt,
+      x: null, y: null, z: null,
+    };
 
     try {
       const origin = process.env.VERCEL_URL
@@ -191,22 +312,15 @@ export async function POST(request: Request) {
       await fetch(`${origin}/api/flares`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: `live-${session_id}-${Date.now()}`,
-          label: session.symptoms.slice(0, 2).join(" + ") || "new flare",
-          symptoms: session.symptoms,
-          clusterId,
-          color: CLUSTER_COLORS[clusterId],
-          confidence: parsed.sensitivity_profile.confidence,
-          synthetic: false,
-          summary: `Live session: ${parsed.sensitivity_profile.primary_trigger}`,
-          novel_factors: [],
-          axis_scores: scores,
-          x: null, y: null, z: null,
-        }),
+        body: JSON.stringify(flareNode),
       });
     } catch {
       // non-fatal
+    }
+
+    // Save to user history
+    if (session.user_id) {
+      addFlare(session.user_id, flareNode as never);
     }
   }
 

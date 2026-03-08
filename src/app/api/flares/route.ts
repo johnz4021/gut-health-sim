@@ -5,6 +5,20 @@ import path from "path";
 // Real flares added during live sessions
 const sessionFlares: object[] = [];
 
+// Cache cluster metadata at module level
+let clusterMetadataCache: Record<string, unknown> | null = null;
+
+function loadClusterMetadata(): Record<string, unknown> {
+  if (clusterMetadataCache) return clusterMetadataCache;
+  const metaPath = path.join(process.cwd(), "public/cluster_metadata.json");
+  if (fs.existsSync(metaPath)) {
+    clusterMetadataCache = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+  } else {
+    clusterMetadataCache = {};
+  }
+  return clusterMetadataCache!;
+}
+
 export async function GET() {
   const filePath = path.join(process.cwd(), "public/flares_processed.json");
 
@@ -16,7 +30,12 @@ export async function GET() {
   }
 
   const base = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-  return NextResponse.json([...base, ...sessionFlares]);
+  const cluster_metadata = loadClusterMetadata();
+
+  return NextResponse.json({
+    flares: [...base, ...sessionFlares],
+    cluster_metadata,
+  });
 }
 
 export async function POST(request: Request) {

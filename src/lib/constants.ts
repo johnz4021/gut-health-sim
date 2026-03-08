@@ -1,15 +1,4 @@
-export const CLUSTER_COLORS: Record<number, string> = {
-  0: "#FF6B6B",  // Caffeine / Sleep — red
-  1: "#4ECDC4",  // FODMAP — teal
-  2: "#FFE66D",  // Stress / Gut-Brain — yellow
-  [-1]: "#C084FC", // Noise / unassigned — purple
-};
-
-export const CLUSTER_LABELS: Record<number, string> = {
-  0: "CAFFEINE / SLEEP",
-  1: "FODMAP",
-  2: "STRESS / GUT-BRAIN",
-};
+export const DEFAULT_NOISE_COLOR = "#888888";
 
 // Sensitivity axes (independent, not competing)
 export const AXIS_KEYS = ["fodmap", "stress_gut", "caffeine_sleep"] as const;
