@@ -385,11 +385,25 @@ FEATURE_MEANS = {
 }
 FEATURE_KEYS = list(FEATURE_MEANS.keys())
 
+QUALITATIVE_MAP = {
+    "none": 0.0, "low": 0.25, "moderate": 0.5, "medium": 0.5,
+    "high": 0.75, "very high": 1.0, "extreme": 1.0,
+    "yes": 1.0, "no": 0.0, "true": 1.0, "false": 0.0,
+}
+
 def normalize(key, val):
     if val is None:
         return FEATURE_MEANS[key]
     if isinstance(val, bool):
         return float(val)
+    if isinstance(val, str):
+        mapped = QUALITATIVE_MAP.get(val.strip().lower())
+        if mapped is not None:
+            return mapped
+        try:
+            val = float(val)
+        except ValueError:
+            return FEATURE_MEANS[key]
     if key == "sleep_hours":
         return min(float(val), 10.0) / 10.0
     if key in ("stress_level", "anxiety_level"):
