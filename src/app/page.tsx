@@ -10,9 +10,12 @@ import { ChatMessage, AxisScores, SensitivityProfile, FlareNode, FlareRecord } f
 import { DEFAULT_NOISE_COLOR } from "@/lib/constants";
 
 const DEFAULT_AXIS_SCORES: AxisScores = {
-  fodmap: 0.5,
-  stress_gut: 0.5,
-  caffeine_sleep: 0.5,
+  diet_fodmap: 0.5,
+  meal_mechanics: 0.5,
+  stress_anxiety: 0.5,
+  sleep_caffeine: 0.5,
+  routine_travel: 0.5,
+  exercise_recovery: 0.5,
 };
 
 const DRAFT_NODE_ID = "__draft__";

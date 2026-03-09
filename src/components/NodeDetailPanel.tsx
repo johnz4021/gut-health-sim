@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { FlareNode, ClusterMetadata, Persona } from "@/lib/types";
+import { FlareNode, ClusterMetadata, Persona, migrateLegacyScores } from "@/lib/types";
 import { fetchPersona } from "@/lib/api";
-import { AXIS_KEYS, AXIS_COLORS, AXIS_LABELS } from "@/lib/constants";
+import { DIMENSION_KEYS, DIMENSION_COLORS, DIMENSION_LABELS } from "@/lib/constants";
 
 interface Props {
   node: FlareNode;
@@ -14,7 +14,7 @@ interface Props {
 
 export default function NodeDetailPanel({ node, clusterMetadata, onClose }: Props) {
   const [persona, setPersona] = useState<Persona | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [, setLoading] = useState(false);
   const [error, setError] = useState(false);
 
   const cluster = clusterMetadata[String(node.clusterId)];
@@ -33,6 +33,11 @@ export default function NodeDetailPanel({ node, clusterMetadata, onClose }: Prop
       .catch(() => setError(true))
       .finally(() => setLoading(false));
   }, [node.id, clusterLabel, isSynthetic, node]);
+
+  // Migrate legacy scores if present on synthetic nodes
+  const nodeScores = node.axis_scores
+    ? migrateLegacyScores(node.axis_scores as unknown as Record<string, number>)
+    : null;
 
   return (
     <AnimatePresence>
@@ -80,9 +85,9 @@ export default function NodeDetailPanel({ node, clusterMetadata, onClose }: Prop
                   {[...Array(3)].map((_, i) => <div key={i} className="h-5 bg-white/5 rounded-full w-16" />)}
                 </div>
               </div>
-              {/* Axis bars placeholder */}
+              {/* Dimension bars placeholder */}
               <div className="space-y-2">
-                {[...Array(3)].map((_, i) => (
+                {[...Array(6)].map((_, i) => (
                   <div key={i} className="flex items-center gap-2">
                     <div className="h-2 bg-white/8 rounded w-20" />
                     <div className="flex-1 h-1.5 bg-white/5 rounded-full" />
@@ -149,18 +154,18 @@ export default function NodeDetailPanel({ node, clusterMetadata, onClose }: Prop
                 </div>
               )}
 
-              {/* Axis scores */}
-              {node.axis_scores && (
+              {/* Dimension scores */}
+              {nodeScores && (
                 <div>
-                  <h4 className="text-white/30 text-[10px] uppercase tracking-wider mb-2">Trigger Axes</h4>
+                  <h4 className="text-white/30 text-[10px] uppercase tracking-wider mb-2">Trigger Dimensions</h4>
                   <div className="space-y-1.5">
-                    {AXIS_KEYS.map((key) => {
-                      const val = node.axis_scores?.[key] ?? 0;
+                    {DIMENSION_KEYS.map((key) => {
+                      const val = nodeScores[key] ?? 0;
                       return (
                         <div key={key} className="flex items-center gap-2">
-                          <span className="text-[10px] text-white/40 w-24 truncate">{AXIS_LABELS[key]}</span>
+                          <span className="text-[10px] text-white/40 w-24 truncate">{DIMENSION_LABELS[key]}</span>
                           <div className="flex-1 h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
-                            <div className="h-full rounded-full" style={{ width: `${val * 100}%`, backgroundColor: AXIS_COLORS[key] }} />
+                            <div className="h-full rounded-full" style={{ width: `${val * 100}%`, backgroundColor: DIMENSION_COLORS[key] }} />
                           </div>
                           <span className="text-[10px] text-white/30 w-6 text-right">{(val * 100).toFixed(0)}</span>
                         </div>

@@ -1,24 +1,26 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { SensitivityProfile } from "@/lib/types";
-import { AXIS_KEYS, AXIS_COLORS, AXIS_LABELS } from "@/lib/constants";
+import { SensitivityProfile, migrateLegacyScores } from "@/lib/types";
+import { DIMENSION_KEYS, DIMENSION_COLORS, DIMENSION_LABELS } from "@/lib/constants";
 
 interface Props {
   profile: SensitivityProfile;
 }
 
 export default function ProfileCard({ profile }: Props) {
-  // Find highest axis for gradient color
-  let maxAxis = "fodmap";
+  const scores = migrateLegacyScores(profile.axis_scores as unknown as Record<string, number>);
+
+  // Find highest dimension for gradient color
+  let maxDim = "diet_fodmap";
   let maxScore = 0;
-  for (const key of AXIS_KEYS) {
-    if (profile.axis_scores[key] > maxScore) {
-      maxScore = profile.axis_scores[key];
-      maxAxis = key;
+  for (const key of DIMENSION_KEYS) {
+    if (scores[key] > maxScore) {
+      maxScore = scores[key];
+      maxDim = key;
     }
   }
-  const color = AXIS_COLORS[maxAxis];
+  const color = DIMENSION_COLORS[maxDim];
 
   return (
     <motion.div
@@ -41,19 +43,19 @@ export default function ProfileCard({ profile }: Props) {
         </h3>
       </div>
 
-      {/* Axis score bars */}
+      {/* Dimension score bars */}
       <div className="space-y-1.5 mb-3">
-        {AXIS_KEYS.map((key) => {
-          const score = profile.axis_scores[key] || 0;
+        {DIMENSION_KEYS.map((key) => {
+          const score = scores[key] || 0;
           const pct = Math.round(score * 100);
-          const axisColor = AXIS_COLORS[key];
+          const dimColor = DIMENSION_COLORS[key];
           return (
             <div key={key}>
               <div className="flex justify-between items-center mb-0.5">
                 <span className="text-[10px] tracking-wider text-white/50">
-                  {AXIS_LABELS[key]}
+                  {DIMENSION_LABELS[key]}
                 </span>
-                <span className="text-[10px] font-mono" style={{ color: axisColor }}>
+                <span className="text-[10px] font-mono" style={{ color: dimColor }}>
                   {pct}%
                 </span>
               </div>
@@ -62,7 +64,7 @@ export default function ProfileCard({ profile }: Props) {
                   className="h-full rounded-full"
                   style={{
                     width: `${pct}%`,
-                    backgroundColor: axisColor,
+                    backgroundColor: dimColor,
                     transition: "width 0.5s ease",
                   }}
                 />

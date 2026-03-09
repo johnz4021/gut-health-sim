@@ -6,13 +6,7 @@ import SpriteText from "three-spritetext";
 import * as THREE from "three";
 import { FlareNode, AxisScores, ClusterMetadata } from "@/lib/types";
 import { DEFAULT_NOISE_COLOR } from "@/lib/constants";
-
-// Axis keys used to score clusters against current axis scores
-const AXIS_FEATURE_MAP: Record<string, string[]> = {
-  caffeine_sleep: ["caffeine_before_food", "caffeine_x_sleep"],
-  fodmap: ["fodmap_load", "stress_x_fodmap", "anxiety_x_fodmap"],
-  stress_gut: ["stress_level", "anxiety_level", "stress_x_fodmap"],
-};
+import { matchCluster } from "@/lib/featureMap";
 
 function getDraftTarget(
   scores: AxisScores,
@@ -21,35 +15,21 @@ function getDraftTarget(
 ): { x: number; y: number; z: number } {
   const realNodes = allNodes.filter((n) => n.id !== "__draft__");
 
-  // Score each cluster by how well its centroid features match the current axis scores
-  let bestCluster = -1;
-  let bestScore = -Infinity;
+  // Score each cluster using shared matchCluster
+  let bestCluster = matchCluster(scores, clusterMeta);
 
-  for (const [clusterIdStr, meta] of Object.entries(clusterMeta)) {
-    const clusterId = Number(clusterIdStr);
-    if (clusterId === -1) continue;
-
-    if (meta.centroid_features && Object.keys(meta.centroid_features).length > 0) {
-      // Score using centroid features
-      let score = 0;
-      for (const [axis, axisScore] of Object.entries(scores)) {
-        const featureKeys = AXIS_FEATURE_MAP[axis] || [];
-        for (const fk of featureKeys) {
-          score += (meta.centroid_features[fk] ?? 0) * axisScore;
-        }
-      }
-      if (score > bestScore) {
-        bestScore = score;
-        bestCluster = clusterId;
-      }
-    } else {
-      // Fallback: compute average axis_scores per cluster from flare data
+  if (bestCluster === -1) {
+    // Fallback: try scoring from flare data averages
+    let bestScore = -Infinity;
+    for (const [clusterIdStr] of Object.entries(clusterMeta)) {
+      const clusterId = Number(clusterIdStr);
+      if (clusterId === -1) continue;
       const members = realNodes.filter(n => n.clusterId === clusterId && n.axis_scores);
       if (members.length === 0) continue;
       let score = 0;
       for (const [axis, axisScore] of Object.entries(scores)) {
         const avgClusterScore = members.reduce((s, n) => s + ((n.axis_scores as unknown as Record<string, number>)?.[axis] ?? 0), 0) / members.length;
-        score += avgClusterScore * axisScore;
+        score += avgClusterScore * (axisScore as number);
       }
       if (score > bestScore) {
         bestScore = score;

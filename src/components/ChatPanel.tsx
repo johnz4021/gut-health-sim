@@ -5,6 +5,7 @@ import ChatMessage from "./ChatMessage";
 import SensitivityBar from "./ProbabilityBar";
 import ProfileCard from "./PhenotypeCard";
 import { ChatMessage as ChatMessageType, AxisScores, SensitivityProfile, FlareRecord } from "@/lib/types";
+import { DIMENSION_KEYS } from "@/lib/constants";
 import FlareHistoryCards from "./FlareHistoryCards";
 
 interface Props {
@@ -45,7 +46,7 @@ export default function ChatPanel({
     setInput("");
   };
 
-  const hasScores = axisScores.fodmap !== 0.5 || axisScores.stress_gut !== 0.5 || axisScores.caffeine_sleep !== 0.5;
+  const hasScores = DIMENSION_KEYS.some((key) => (axisScores as unknown as Record<string, number>)[key] !== 0.5);
 
   return (
     <div className="flex flex-col h-full glass-panel rounded-r-none">
@@ -112,7 +113,7 @@ export default function ChatPanel({
       {converged && sensitivityProfile && (
         <div className="px-4 pb-2">
           <p className="text-[11px] text-[#C084FC]/70 text-center">
-            Your flare has been mapped. Ask me anything — I'll draw on others with similar triggers.
+            Your flare has been mapped. Ask me anything — I&apos;ll draw on others with similar triggers.
           </p>
         </div>
       )}

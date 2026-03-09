@@ -37,7 +37,7 @@ export async function POST(request: Request) {
   const prompt = `Given this IBS flare-up data from a cohort member:
 - Symptoms: ${(node.symptoms || []).join(", ")}
 - Summary: ${node.summary || "N/A"}
-- Trigger scores: FODMAP=${axes.fodmap ?? "?"}, Stress=${axes.stress_gut ?? "?"}, Caffeine/Sleep=${axes.caffeine_sleep ?? "?"}
+- Trigger scores: Diet/FODMAP=${axes.diet_fodmap ?? axes.fodmap ?? "?"}, Meal Mechanics=${axes.meal_mechanics ?? "?"}, Stress/Anxiety=${axes.stress_anxiety ?? axes.stress_gut ?? "?"}, Sleep/Caffeine=${axes.sleep_caffeine ?? axes.caffeine_sleep ?? "?"}, Routine/Travel=${axes.routine_travel ?? "?"}, Exercise=${axes.exercise_recovery ?? "?"}
 - Cluster: ${cluster_label || "Unknown"}
 
 Generate a plausible user profile. Make them somewhat similar to this reference profile (age: ${userAge}, sex: ${userSex}, subtype: ${userSubtype}) but NOT identical — vary the age range, possibly different sex, different onset period, etc.

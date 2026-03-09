@@ -3,6 +3,9 @@ import Anthropic from "@anthropic-ai/sdk";
 import fs from "fs";
 import path from "path";
 import { getOrCreateUser, updateBackground, recordFlare, getUserSummary, getInitialAxisScores } from "@/lib/userStore";
+import { matchCluster } from "@/lib/featureMap";
+import { DimensionScores } from "@/lib/types";
+import { DIMENSION_KEYS } from "@/lib/constants";
 
 const client = new Anthropic();
 
@@ -21,18 +24,12 @@ function loadClusterMetadata() {
 
 type ConversationState = "ONBOARDING" | "SYMPTOM_INTAKE" | "QUESTIONING" | "CONVERGED";
 
-interface AxisScores {
-  fodmap: number;
-  stress_gut: number;
-  caffeine_sleep: number;
-}
-
 interface Session {
   state: ConversationState;
   user_id?: string;
   symptoms: string[];
   context: Record<string, unknown>;
-  axis_scores: AxisScores;
+  axis_scores: DimensionScores;
   questions_asked: string[];
   history: Array<{ role: "user" | "assistant"; content: string }>;
   converged_cluster?: number;
@@ -45,29 +42,54 @@ if (!globalChat.__gutmap_sessions) {
 }
 const sessions = globalChat.__gutmap_sessions;
 
-const SENSITIVITY_AXES = `
-SENSITIVITY AXES — these are INDEPENDENT scores (0-1 each), NOT probabilities that sum to 1.
-A patient can score high on ALL three axes simultaneously.
+const DEFAULT_SCORES: DimensionScores = {
+  diet_fodmap: 0.5,
+  meal_mechanics: 0.5,
+  stress_anxiety: 0.5,
+  sleep_caffeine: 0.5,
+  routine_travel: 0.5,
+  exercise_recovery: 0.5,
+};
 
-FODMAP AXIS (0-1)
-  Key signals: high-FODMAP foods (onion, garlic, wheat, lactose, fructose, legumes), bloating/gas/cramping 1-4hrs after eating
+const SENSITIVITY_DIMENSIONS = `
+SENSITIVITY DIMENSIONS — these are 6 INDEPENDENT scores (0-1 each), NOT probabilities that sum to 1.
+A patient can score high on ALL dimensions simultaneously.
+
+DIET / FODMAP (diet_fodmap, 0-1)
+  Key signals: high-FODMAP foods (onion, garlic, wheat, lactose, fructose, legumes), high fat meals, alcohol
   Scientific basis: Monash University FODMAP research, fermentation by gut bacteria
 
-STRESS / GUT-BRAIN AXIS (0-1)
-  Key signals: stress_level>3, anxiety high, skipped meals, disrupted routine, travel
-  Symptoms: pain, diarrhea, nausea. Often delayed onset.
-  Scientific basis: HPA axis — cortisol directly affects gut motility
+MEAL MECHANICS (meal_mechanics, 0-1)
+  Key signals: large meal size, fast eating speed, carbonated drinks, skipped meals
+  Symptoms: bloating, distension, early satiety
+  Scientific basis: gastric stretch receptors, swallowed air, irregular motility patterns
 
-CAFFEINE / SLEEP AXIS (0-1)
-  Key signals: caffeine_before_food=true, sleep_hours<6, irregular meal timing
+STRESS / ANXIETY (stress_anxiety, 0-1)
+  Key signals: stress_level>3, anxiety high, worry/rumination
+  Symptoms: pain, diarrhea, nausea. Often delayed onset.
+  Scientific basis: HPA axis — cortisol directly affects gut motility, brain-gut axis
+
+SLEEP / CAFFEINE (sleep_caffeine, 0-1)
+  Key signals: caffeine_before_food=true, sleep_hours<6, poor sleep quality
   Symptoms: urgency, loose stools, morning flares
   Scientific basis: caffeine stimulates colonic motility; sleep deprivation elevates cortisol
 
-CROSS-AXIS INTERACTIONS (important!):
+ROUTINE / TRAVEL (routine_travel, 0-1)
+  Key signals: travel, disrupted daily routine, recent antibiotics
+  Symptoms: constipation or diarrhea, bloating, irregular timing
+  Scientific basis: circadian disruption, microbiome perturbation, jet lag effects on gut
+
+EXERCISE (exercise_recovery, 0-1)
+  Key signals: exercise intensity and timing relative to meals
+  Symptoms: cramping, urgency during/after exercise, or improvement with moderate activity
+  Scientific basis: exercise redistributes blood flow from gut, but moderate exercise improves motility
+
+CROSS-DIMENSION INTERACTIONS (important!):
 - Stress amplifies FODMAP reactivity — a food that's normally tolerable can cause severe symptoms during high-stress periods
 - Poor sleep + caffeine compounds urgency symptoms
 - Anxiety + FODMAP foods often creates worse bloating than either alone
-- Most real patients are poly-sensitive across 2+ axes
+- Travel + disrupted routine + meal skipping creates compounding effects
+- Most real patients are poly-sensitive across 2+ dimensions
 `;
 
 function buildSystemPrompt(session: Session): string {
@@ -95,14 +117,14 @@ function buildSystemPrompt(session: Session): string {
       if (bg.ibs_subtype === "IBS-D") implications.push("IBS-D: urgency is baseline — focus on severity changes, not presence of urgency");
       if (bg.ibs_subtype === "IBS-C") implications.push("IBS-C: bloating is expected — look for what makes it worse, not its presence");
       if (bg.active_medications?.some((m) => /ssri|sertraline|fluoxetine|escitalopram|paroxetine/i.test(m))) {
-        implications.push("SSRI: serotonin modulation affects motility — stress_gut baseline is dampened");
+        implications.push("SSRI: serotonin modulation affects motility — stress_anxiety baseline is dampened");
       }
       if (bg.dietary_baseline && /low.?fodmap/i.test(bg.dietary_baseline)) {
         implications.push("Low-FODMAP diet: look for specific sub-categories (fructans vs lactose vs polyols) rather than broad FODMAP load");
       }
       if (bg.tracks_menstrual_cycle) implications.push("Tracks menstrual cycle: ask about cycle phase when relevant");
       if (bg.diagnosed_comorbidities?.some((c) => /anxiety|gad|panic/i.test(c))) {
-        implications.push("Anxiety comorbidity: stress score ~0.7 is less remarkable — look for spikes above their elevated baseline");
+        implications.push("Anxiety comorbidity: stress_anxiety score ~0.7 is less remarkable — look for spikes above their elevated baseline");
       }
       if (implications.length > 0) {
         backgroundContext += `\n\nCLINICAL IMPLICATIONS:\n${implications.map((i) => `- ${i}`).join("\n")}`;
@@ -113,29 +135,33 @@ function buildSystemPrompt(session: Session): string {
     if (summary.flare_count > 0) {
       personalHistoryContext = `\nPERSONAL HISTORY (${summary.flare_count} previous flare${summary.flare_count > 1 ? "s" : ""} on file):`;
       if (summary.personal_baseline) {
-        personalHistoryContext += `\n- Baseline sensitivity: fodmap=${summary.personal_baseline.fodmap.toFixed(2)}, stress_gut=${summary.personal_baseline.stress_gut.toFixed(2)}, caffeine_sleep=${summary.personal_baseline.caffeine_sleep.toFixed(2)}`;
+        const b = summary.personal_baseline;
+        personalHistoryContext += `\n- Baseline sensitivity: ${DIMENSION_KEYS.map((k) => `${k}=${b[k].toFixed(2)}`).join(", ")}`;
       }
       if (summary.known_triggers && summary.known_triggers.length > 0) {
         personalHistoryContext += `\n- Previously confirmed triggers (appeared in 2+ flares): ${summary.known_triggers.join(", ")}`;
       }
-      if (summary.high_confidence_axes && summary.high_confidence_axes.length > 0) {
-        personalHistoryContext += `\n- Most sensitive axis historically: ${summary.high_confidence_axes.join(", ")}`;
+      if (summary.high_confidence_dimensions && summary.high_confidence_dimensions.length > 0) {
+        personalHistoryContext += `\n- Most sensitive dimensions historically: ${summary.high_confidence_dimensions.join(", ")}`;
       }
       // Recent flare summaries (last 5)
       if (summary.flare_history && summary.flare_history.length > 0) {
         const recent = summary.flare_history.slice(-5);
         personalHistoryContext += `\n- Recent flares:`;
         for (const flare of recent) {
-          personalHistoryContext += `\n  • ${flare.timestamp}: scores={fodmap: ${flare.axis_scores.fodmap.toFixed(2)}, stress_gut: ${flare.axis_scores.stress_gut.toFixed(2)}, caffeine_sleep: ${flare.axis_scores.caffeine_sleep.toFixed(2)}}, trigger="${flare.primary_trigger}", symptoms=[${flare.symptoms.join(", ")}]`;
+          const s = flare.axis_scores;
+          personalHistoryContext += `\n  • ${flare.timestamp}: scores={${DIMENSION_KEYS.map((k) => `${k}: ${(s[k] ?? 0.5).toFixed(2)}`).join(", ")}}, trigger="${flare.primary_trigger}", symptoms=[${flare.symptoms.join(", ")}]`;
         }
       }
       personalHistoryContext += `\n\nHISTORY-INFORMED INSTRUCTIONS:
-- Prioritize historically sensitive axes in your questioning
+- Prioritize historically sensitive dimensions in your questioning
 - Flag if current symptoms match a known pattern from previous flares
 - If pattern strongly matches a previous flare, you may converge faster (after 2 questions instead of 3)
 - Reference their history naturally: "Last time you had similar symptoms, it was stress-related..."`;
     }
   }
+
+  const scoreTemplate = `{"diet_fodmap": 0.5, "meal_mechanics": 0.5, "stress_anxiety": 0.5, "sleep_caffeine": 0.5, "routine_travel": 0.5, "exercise_recovery": 0.5}`;
 
   if (session.state === "ONBOARDING") {
     return `You are GutMap, an AI investigating IBS flare-up triggers. You are in ONBOARDING mode — getting to know a new user.
@@ -156,7 +182,7 @@ RESPONSE FORMAT — respond with ONLY this JSON:
 {
   "reply": "your conversational message",
   "state": "ONBOARDING",
-  "axis_scores": {"fodmap": 0.5, "stress_gut": 0.5, "caffeine_sleep": 0.5},
+  "axis_scores": ${scoreTemplate},
   "converged": false,
   "sensitivity_profile": null,
   "symptoms": [],
@@ -172,32 +198,32 @@ When you have gathered enough background info, set:
 - "state": "SYMPTOM_INTAKE"`;
   }
 
-  return `You are GutMap, an AI investigating IBS flare-up triggers using independent sensitivity axis scoring.
+  return `You are GutMap, an AI investigating IBS flare-up triggers using independent sensitivity dimension scoring.
 
-${SENSITIVITY_AXES}
+${SENSITIVITY_DIMENSIONS}
 ${backgroundContext}
 ${personalHistoryContext}
 
 CURRENT SESSION STATE:
 - Symptoms reported: ${session.symptoms.join(", ") || "none yet"}
 - Context collected: ${JSON.stringify(session.context)}
-- Current axis scores: ${JSON.stringify(session.axis_scores)}
+- Current dimension scores: ${JSON.stringify(session.axis_scores)}
 - Questions already asked: ${session.questions_asked.join("; ") || "none"}
 - State: ${session.state}
 
 RULES:
-1. In SYMPTOM_INTAKE state: parse symptoms from the user's message, set initial axis scores based on symptom pattern, transition to QUESTIONING, ask the first discriminating question.
-2. In QUESTIONING state: ask ONE targeted question that helps refine the axis scores. Focus on questions that reveal cross-axis interactions (e.g., "Did stress make the reaction worse?"). Never repeat a question already asked.
+1. In SYMPTOM_INTAKE state: parse symptoms from the user's message, set initial dimension scores based on symptom pattern, transition to QUESTIONING, ask the first discriminating question.
+2. In QUESTIONING state: ask ONE targeted question that helps refine the dimension scores. Focus on questions that reveal cross-dimension interactions (e.g., "Did stress make the reaction worse?" or "Were you traveling or off your normal routine?"). Never repeat a question already asked.
 3. CONVERGE when: (a) 3+ questions asked AND scores have stabilized (changes < 0.1), OR (b) after 5 questions max.
 4. Keep responses SHORT — 1-2 sentences max. This is a chat interface.
 5. Be warm and conversational, not clinical.
-6. Remember: axes are INDEPENDENT. If evidence suggests high FODMAP AND high stress, BOTH should be high. Do NOT force them to compete.
+6. Remember: dimensions are INDEPENDENT. If evidence suggests high FODMAP AND high stress, BOTH should be high. Do NOT force them to compete.
 
 RESPONSE FORMAT — respond with ONLY this JSON:
 {
   "reply": "your message to the user",
   "state": "SYMPTOM_INTAKE | QUESTIONING | CONVERGED",
-  "axis_scores": {"fodmap": 0.5, "stress_gut": 0.5, "caffeine_sleep": 0.5},
+  "axis_scores": ${scoreTemplate},
   "converged": false,
   "sensitivity_profile": null,
   "symptoms": ["extracted", "symptom", "keywords"],
@@ -207,9 +233,9 @@ RESPONSE FORMAT — respond with ONLY this JSON:
 
 If converged=true, sensitivity_profile must be:
 {
-  "axis_scores": {"fodmap": 0.0, "stress_gut": 0.0, "caffeine_sleep": 0.0},
-  "primary_trigger": "description of the dominant trigger pattern, e.g. 'FODMAP foods, significantly worsened by stress'",
-  "amplifiers": ["list of cross-axis amplification effects observed, e.g. 'stress amplifies FODMAP reactivity'"],
+  "axis_scores": ${scoreTemplate},
+  "primary_trigger": "description of the dominant trigger pattern",
+  "amplifiers": ["list of cross-dimension amplification effects observed"],
   "confidence": 0.0,
   "triggers": ["specific triggers identified"]
 }
@@ -237,7 +263,7 @@ export async function POST(request: Request) {
       }
     }
 
-    const initialScores = user_id ? getInitialAxisScores(user_id) : { fodmap: 0.5, stress_gut: 0.5, caffeine_sleep: 0.5 };
+    const initialScores = user_id ? getInitialAxisScores(user_id) : { ...DEFAULT_SCORES };
     sessions.set(session_id, {
       state: initialState,
       user_id,
@@ -294,22 +320,25 @@ export async function POST(request: Request) {
     const adviceSystemPrompt = `You are GutMap, a post-analysis advisor for IBS trigger management. The user has already completed their flare investigation and been mapped to a cluster of similar patients.
 
 YOUR USER'S PROFILE:
-- Axis scores: ${JSON.stringify(session.axis_scores)}
+- Dimension scores: ${JSON.stringify(session.axis_scores)}
 - Symptoms: ${session.symptoms.join(", ") || "unknown"}
 ${neighborContext}
 
 INSTRUCTIONS:
-- Give specific, actionable advice grounded in what others in this cluster experience
-- Reference "people in your cluster" or "others with similar triggers" when making recommendations
-- Draw on the neighbor data above to identify common patterns and effective strategies
-- Keep responses concise (2-4 sentences) and warm
-- You can suggest dietary changes, lifestyle adjustments, tracking strategies, etc.
+- First, acknowledge what they're going through with empathy — name their specific symptoms back to them so they feel heard
+- Give IMMEDIATE, PRACTICAL REMEDIES they can do RIGHT NOW to get relief. Not prevention tips — actual things to do in the moment:
+  * For bloating/gas: lying on left side, knee-to-chest position, gentle abdominal massage clockwise, hot water/peppermint tea
+  * For cramping/pain: heating pad on abdomen, peppermint oil capsules, diaphragmatic breathing (4s in, 6s out), sipping warm water
+  * For urgency/diarrhea: sit still, slow breathing to activate vagus nerve, avoid caffeine/dairy right now, small sips of room-temp water
+  * For nausea: ginger tea or ginger chews, cold compress on inner wrist, fresh air, avoid lying flat
+- Reference what others in their cluster found helpful when relevant
+- Keep responses concise (3-5 sentences) and warm
 - Do NOT give medical diagnoses or suggest prescription medications
 - Continue the conversation naturally — the user may ask follow-up questions`;
 
     const adviceResponse = await client.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 400,
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 500,
       system: adviceSystemPrompt,
       messages: session.history,
     });
@@ -380,46 +409,28 @@ INSTRUCTIONS:
 
   // If converged, add flare to graph
   if (parsed.converged && parsed.sensitivity_profile) {
-    const scores = parsed.sensitivity_profile.axis_scores || parsed.axis_scores;
+    const scores: DimensionScores = parsed.sensitivity_profile.axis_scores || parsed.axis_scores;
     const meta = loadClusterMetadata();
 
-    // Score each cluster's centroid_features against axis scores to find best match
-    let bestCluster = -1;
-    let bestScore = -Infinity;
-    const AXIS_FEATURE_MAP: Record<string, string[]> = {
-      caffeine_sleep: ["caffeine_before_food", "caffeine_x_sleep"],
-      fodmap: ["fodmap_load", "stress_x_fodmap", "anxiety_x_fodmap"],
-      stress_gut: ["stress_level", "anxiety_level", "stress_x_fodmap"],
-    };
+    // Use shared matchCluster for centroid-based scoring
+    let bestCluster = matchCluster(scores, meta);
 
-    for (const [clusterIdStr, clusterMeta] of Object.entries(meta)) {
-      const cid = Number(clusterIdStr);
-      if (cid === -1) continue;
-      const cf = clusterMeta.centroid_features;
-      if (!cf) continue;
-
-      let score = 0;
-      for (const [axis, axisScore] of Object.entries(scores)) {
-        const featureKeys = AXIS_FEATURE_MAP[axis] || [];
-        for (const fk of featureKeys) {
-          score += (cf[fk] ?? 0) * (axisScore as number);
-        }
-      }
-      if (score > bestScore) {
-        bestScore = score;
-        bestCluster = cid;
-      }
-    }
-
-    // Fallback: hardcoded mapping if no cluster metadata
+    // Fallback: hardcoded mapping if no cluster metadata matched
     if (bestCluster === -1) {
-      const AXIS_TO_CLUSTER: Record<string, number> = { fodmap: 1, stress_gut: 2, caffeine_sleep: 0 };
-      let maxAxis = "fodmap";
+      let maxDim = "diet_fodmap" as keyof DimensionScores;
       let maxVal = 0;
-      for (const [axis, score] of Object.entries(scores)) {
-        if ((score as number) > maxVal) { maxVal = score as number; maxAxis = axis; }
+      for (const dim of DIMENSION_KEYS) {
+        if (scores[dim] > maxVal) { maxVal = scores[dim]; maxDim = dim; }
       }
-      bestCluster = AXIS_TO_CLUSTER[maxAxis] ?? -1;
+      const DIM_TO_CLUSTER: Record<string, number> = {
+        diet_fodmap: 1,
+        meal_mechanics: 3,
+        stress_anxiety: 2,
+        sleep_caffeine: 0,
+        routine_travel: 4,
+        exercise_recovery: 5,
+      };
+      bestCluster = DIM_TO_CLUSTER[maxDim] ?? -1;
     }
 
     session.converged_cluster = bestCluster;

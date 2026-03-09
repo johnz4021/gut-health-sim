@@ -1,24 +1,25 @@
 "use client";
 
-import { AXIS_KEYS, AXIS_COLORS, AXIS_LABELS } from "@/lib/constants";
-import { AxisScores } from "@/lib/types";
+import { DIMENSION_KEYS, DIMENSION_COLORS, DIMENSION_LABELS } from "@/lib/constants";
+import { AxisScores, migrateLegacyScores } from "@/lib/types";
 
 interface Props {
   axisScores: AxisScores;
 }
 
 export default function SensitivityBar({ axisScores }: Props) {
+  const scores = migrateLegacyScores(axisScores as unknown as Record<string, number>);
   return (
     <div className="px-4 py-3 space-y-2">
-      {AXIS_KEYS.map((key) => {
-        const score = axisScores[key] || 0;
+      {DIMENSION_KEYS.map((key) => {
+        const score = scores[key] || 0;
         const pct = Math.round(score * 100);
-        const color = AXIS_COLORS[key];
+        const color = DIMENSION_COLORS[key];
         return (
           <div key={key}>
             <div className="flex justify-between items-center mb-0.5">
               <span className="text-[10px] tracking-wider text-white/50">
-                {AXIS_LABELS[key]}
+                {DIMENSION_LABELS[key]}
               </span>
               <span className="text-[10px] font-mono" style={{ color }}>
                 {pct}%

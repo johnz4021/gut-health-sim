@@ -1,11 +1,43 @@
-export interface AxisScores {
+export interface DimensionScores {
+  diet_fodmap: number;
+  meal_mechanics: number;
+  stress_anxiety: number;
+  sleep_caffeine: number;
+  routine_travel: number;
+  exercise_recovery: number;
+}
+
+/** Legacy 3-axis scores from before the 6-dimension expansion */
+export interface LegacyAxisScores {
   fodmap: number;
   stress_gut: number;
   caffeine_sleep: number;
 }
 
+/** Type alias — all new code should use DimensionScores directly */
+export type AxisScores = DimensionScores;
+
+export function isLegacyScores(
+  scores: Record<string, number>
+): boolean {
+  return "fodmap" in scores && "stress_gut" in scores && !("diet_fodmap" in scores);
+}
+
+/** Convert old 3-axis records to 6-dimension format (new dims default to 0.5) */
+export function migrateLegacyScores(scores: Record<string, number>): DimensionScores {
+  if (!isLegacyScores(scores)) return scores as unknown as DimensionScores;
+  return {
+    diet_fodmap: scores.fodmap,
+    meal_mechanics: 0.5,
+    stress_anxiety: scores.stress_gut,
+    sleep_caffeine: scores.caffeine_sleep,
+    routine_travel: 0.5,
+    exercise_recovery: 0.5,
+  };
+}
+
 export interface SensitivityProfile {
-  axis_scores: AxisScores;
+  axis_scores: DimensionScores;
   primary_trigger: string;
   amplifiers: string[];
   confidence: number;
@@ -28,7 +60,7 @@ export interface UserBackground {
 export interface FlareRecord {
   session_id: string;
   timestamp: string;
-  axis_scores: AxisScores;
+  axis_scores: DimensionScores;
   symptoms: string[];
   confirmed_triggers: string[];
   primary_trigger: string;
@@ -41,9 +73,9 @@ export interface UserProfileSummary {
   flare_count: number;
   has_background: boolean;
   background?: UserBackground;
-  personal_baseline?: AxisScores;
+  personal_baseline?: DimensionScores;
   known_triggers?: string[];
-  high_confidence_axes?: string[];
+  high_confidence_dimensions?: string[];
   flare_history?: FlareRecord[];
 }
 
@@ -70,7 +102,7 @@ export interface FlareNode {
   synthetic: boolean;
   summary?: string;
   novel_factors?: string[];
-  axis_scores?: AxisScores;
+  axis_scores?: DimensionScores;
   user_id?: string;
   created_at?: string;
   x?: number;
@@ -103,7 +135,7 @@ export interface ChatMessage {
 export interface ChatResponse {
   reply: string;
   state: "SYMPTOM_INTAKE" | "QUESTIONING" | "ONBOARDING" | "CONVERGED";
-  axis_scores: AxisScores;
+  axis_scores: DimensionScores;
   converged: boolean;
   sensitivity_profile: SensitivityProfile | null;
 }
