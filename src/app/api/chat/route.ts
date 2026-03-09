@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import fs from "fs";
 import path from "path";
-import { getOrCreateUser, updateBackground, addFlare, getUserSummary } from "@/lib/userStore";
+import { getOrCreateUser, updateBackground, recordFlare, getUserSummary, getInitialAxisScores } from "@/lib/userStore";
 
 const client = new Anthropic();
 
@@ -37,7 +37,12 @@ interface Session {
   history: Array<{ role: "user" | "assistant"; content: string }>;
 }
 
-const sessions = new Map<string, Session>();
+// Use globalThis to survive Next.js HMR in dev mode
+const globalChat = globalThis as unknown as { __gutmap_sessions?: Map<string, Session> };
+if (!globalChat.__gutmap_sessions) {
+  globalChat.__gutmap_sessions = new Map<string, Session>();
+}
+const sessions = globalChat.__gutmap_sessions;
 
 const SENSITIVITY_AXES = `
 SENSITIVITY AXES — these are INDEPENDENT scores (0-1 each), NOT probabilities that sum to 1.
@@ -67,27 +72,82 @@ CROSS-AXIS INTERACTIONS (important!):
 function buildSystemPrompt(session: Session): string {
   // Build background context if user has one
   let backgroundContext = "";
+  let personalHistoryContext = "";
   if (session.user_id) {
     const summary = getUserSummary(session.user_id);
     if (summary.has_background && summary.background) {
       const bg = summary.background;
-      backgroundContext = `\nPATIENT BACKGROUND:
+      backgroundContext = `\nUSER BACKGROUND:
 - Age range: ${bg.age_range || "unknown"}
 - Sex: ${bg.sex || "unknown"}
 - IBS subtype: ${bg.ibs_subtype || "unknown"}
 - Diagnosed: ${bg.diagnosed ? "yes" : "no"}
 - Onset period: ${bg.onset_period || "unknown"}
-- Known triggers: ${bg.known_triggers?.join(", ") || "none specified"}`;
+- Known triggers: ${bg.known_triggers?.join(", ") || "none specified"}
+- Active medications: ${bg.active_medications?.join(", ") || "none"}
+- Dietary baseline: ${bg.dietary_baseline || "not specified"}
+- Tracks menstrual cycle: ${bg.tracks_menstrual_cycle === null ? "not asked" : bg.tracks_menstrual_cycle ? "yes" : "no"}
+- Diagnosed comorbidities: ${bg.diagnosed_comorbidities?.join(", ") || "none"}`;
+
+      // Clinical implications
+      const implications: string[] = [];
+      if (bg.ibs_subtype === "IBS-D") implications.push("IBS-D: urgency is baseline — focus on severity changes, not presence of urgency");
+      if (bg.ibs_subtype === "IBS-C") implications.push("IBS-C: bloating is expected — look for what makes it worse, not its presence");
+      if (bg.active_medications?.some((m) => /ssri|sertraline|fluoxetine|escitalopram|paroxetine/i.test(m))) {
+        implications.push("SSRI: serotonin modulation affects motility — stress_gut baseline is dampened");
+      }
+      if (bg.dietary_baseline && /low.?fodmap/i.test(bg.dietary_baseline)) {
+        implications.push("Low-FODMAP diet: look for specific sub-categories (fructans vs lactose vs polyols) rather than broad FODMAP load");
+      }
+      if (bg.tracks_menstrual_cycle) implications.push("Tracks menstrual cycle: ask about cycle phase when relevant");
+      if (bg.diagnosed_comorbidities?.some((c) => /anxiety|gad|panic/i.test(c))) {
+        implications.push("Anxiety comorbidity: stress score ~0.7 is less remarkable — look for spikes above their elevated baseline");
+      }
+      if (implications.length > 0) {
+        backgroundContext += `\n\nCLINICAL IMPLICATIONS:\n${implications.map((i) => `- ${i}`).join("\n")}`;
+      }
     }
+
+    // Personal history block for returning users
     if (summary.flare_count > 0) {
-      backgroundContext += `\n- Previous flares: ${summary.flare_count} total`;
+      personalHistoryContext = `\nPERSONAL HISTORY (${summary.flare_count} previous flare${summary.flare_count > 1 ? "s" : ""} on file):`;
+      if (summary.personal_baseline) {
+        personalHistoryContext += `\n- Baseline sensitivity: fodmap=${summary.personal_baseline.fodmap.toFixed(2)}, stress_gut=${summary.personal_baseline.stress_gut.toFixed(2)}, caffeine_sleep=${summary.personal_baseline.caffeine_sleep.toFixed(2)}`;
+      }
+      if (summary.known_triggers && summary.known_triggers.length > 0) {
+        personalHistoryContext += `\n- Previously confirmed triggers (appeared in 2+ flares): ${summary.known_triggers.join(", ")}`;
+      }
+      if (summary.high_confidence_axes && summary.high_confidence_axes.length > 0) {
+        personalHistoryContext += `\n- Most sensitive axis historically: ${summary.high_confidence_axes.join(", ")}`;
+      }
+      // Recent flare summaries (last 5)
+      if (summary.flare_history && summary.flare_history.length > 0) {
+        const recent = summary.flare_history.slice(-5);
+        personalHistoryContext += `\n- Recent flares:`;
+        for (const flare of recent) {
+          personalHistoryContext += `\n  • ${flare.timestamp}: scores={fodmap: ${flare.axis_scores.fodmap.toFixed(2)}, stress_gut: ${flare.axis_scores.stress_gut.toFixed(2)}, caffeine_sleep: ${flare.axis_scores.caffeine_sleep.toFixed(2)}}, trigger="${flare.primary_trigger}", symptoms=[${flare.symptoms.join(", ")}]`;
+        }
+      }
+      personalHistoryContext += `\n\nHISTORY-INFORMED INSTRUCTIONS:
+- Prioritize historically sensitive axes in your questioning
+- Flag if current symptoms match a known pattern from previous flares
+- If pattern strongly matches a previous flare, you may converge faster (after 2 questions instead of 3)
+- Reference their history naturally: "Last time you had similar symptoms, it was stress-related..."`;
     }
   }
 
   if (session.state === "ONBOARDING") {
     return `You are GutMap, an AI investigating IBS flare-up triggers. You are in ONBOARDING mode — getting to know a new user.
 
-Ask conversational questions to learn about them. You need: age range, sex, IBS subtype (IBS-D/C/M/U or unsure), whether they've been diagnosed, how long they've had symptoms, and any known triggers.
+Ask conversational questions to learn about them. You need:
+- Age range and sex
+- IBS subtype (IBS-D/C/M/U or unsure)
+- Whether they've been diagnosed and how long they've had symptoms
+- Any known triggers
+- Current medications (especially SSRIs, antispasmodics, PPIs)
+- Dietary approach (e.g., low-FODMAP, elimination diet, no specific diet)
+- Whether they track their menstrual cycle (if relevant)
+- Any diagnosed comorbidities (anxiety, depression, GERD, endometriosis, etc.)
 
 Ask 2-3 questions in a warm, friendly way. Don't be clinical. After you have enough info, set background_complete=true.
 
@@ -106,7 +166,7 @@ RESPONSE FORMAT — respond with ONLY this JSON:
 }
 
 When you have gathered enough background info, set:
-- "background_update": {"age_range": "...", "sex": "...", "ibs_subtype": "...", "diagnosed": true/false, "onset_period": "...", "known_triggers": ["..."]}
+- "background_update": {"age_range": "...", "sex": "...", "ibs_subtype": "...", "diagnosed": true/false, "onset_period": "...", "known_triggers": ["..."], "active_medications": ["..."], "dietary_baseline": "...", "tracks_menstrual_cycle": true/false/null, "diagnosed_comorbidities": ["..."]}
 - "background_complete": true
 - "state": "SYMPTOM_INTAKE"`;
   }
@@ -115,6 +175,7 @@ When you have gathered enough background info, set:
 
 ${SENSITIVITY_AXES}
 ${backgroundContext}
+${personalHistoryContext}
 
 CURRENT SESSION STATE:
 - Symptoms reported: ${session.symptoms.join(", ") || "none yet"}
@@ -166,12 +227,13 @@ export async function POST(request: Request) {
       }
     }
 
+    const initialScores = user_id ? getInitialAxisScores(user_id) : { fodmap: 0.5, stress_gut: 0.5, caffeine_sleep: 0.5 };
     sessions.set(session_id, {
       state: initialState,
       user_id,
       symptoms: [],
       context: {},
-      axis_scores: { fodmap: 0.5, stress_gut: 0.5, caffeine_sleep: 0.5 },
+      axis_scores: initialScores,
       questions_asked: [],
       history: [],
     });
@@ -318,9 +380,18 @@ export async function POST(request: Request) {
       // non-fatal
     }
 
-    // Save to user history
+    // Save to user history as FlareRecord
     if (session.user_id) {
-      addFlare(session.user_id, flareNode as never);
+      recordFlare(session.user_id, {
+        session_id,
+        timestamp: createdAt,
+        axis_scores: scores,
+        symptoms: session.symptoms,
+        confirmed_triggers: parsed.sensitivity_profile.triggers || [],
+        primary_trigger: parsed.sensitivity_profile.primary_trigger || "",
+        amplifiers: parsed.sensitivity_profile.amplifiers || [],
+        summary: `${parsed.sensitivity_profile.primary_trigger}`,
+      });
     }
   }
 

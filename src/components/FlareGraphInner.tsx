@@ -86,11 +86,12 @@ interface Props {
   draftNodeId: string | null;
   axisScores: AxisScores;
   clusterMetadata: Record<string, ClusterMetadata>;
+  currentUserId: string | null;
   width: number;
   height: number;
 }
 
-export default function FlareGraphInner({ flares, newFlareIds, draftNodeId, axisScores, clusterMetadata, width, height }: Props) {
+export default function FlareGraphInner({ flares, newFlareIds, draftNodeId, axisScores, clusterMetadata, currentUserId, width, height }: Props) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const graphRef = useRef<any>(null);
   const newFlareIdsRef = useRef<Set<string>>(newFlareIds);
@@ -100,12 +101,14 @@ export default function FlareGraphInner({ flares, newFlareIds, draftNodeId, axis
   const draftNodeIdRef = useRef(draftNodeId);
   const axisScoresRef = useRef(axisScores);
   const clusterMetadataRef = useRef(clusterMetadata);
+  const currentUserIdRef = useRef(currentUserId);
 
   newFlareIdsRef.current = newFlareIds;
   flaresRef.current = flares;
   draftNodeIdRef.current = draftNodeId;
   axisScoresRef.current = axisScores;
   clusterMetadataRef.current = clusterMetadata;
+  currentUserIdRef.current = currentUserId;
 
   // Pre-pin nodes before ForceGraph3D sees them — prevents d3-force race condition
   const SPREAD = 3;
@@ -349,13 +352,14 @@ export default function FlareGraphInner({ flares, newFlareIds, draftNodeId, axis
       const isNew = newFlareIdsRef.current.has(node.id);
       const isDraft = node.id === draftNodeIdRef.current;
       const isHovered = hoveredNodeRef.current === node.id;
+      const isCurrentUser = !isDraft && !!currentUserIdRef.current && node.user_id === currentUserIdRef.current;
 
       // Dynamic color from cluster metadata
       const nodeColor = isDraft
         ? DEFAULT_NOISE_COLOR
         : clusterMetadataRef.current[String(node.clusterId)]?.color ?? node.color;
 
-      const sphereSize = 3;
+      const sphereSize = isCurrentUser ? 4 : 3;
       const geometry = new THREE.SphereGeometry(sphereSize, 32, 32);
       const material = new THREE.MeshStandardMaterial({
         color: isDraft ? DEFAULT_NOISE_COLOR : nodeColor,
@@ -364,10 +368,24 @@ export default function FlareGraphInner({ flares, newFlareIds, draftNodeId, axis
         transparent: true,
         opacity: 0.9,
         emissive: new THREE.Color(isDraft ? DEFAULT_NOISE_COLOR : isNew ? "#FFD700" : nodeColor),
-        emissiveIntensity: isDraft ? 1.0 : isNew ? 0.8 : 0.15,
+        emissiveIntensity: isDraft ? 1.0 : isNew ? 0.8 : isCurrentUser ? 0.4 : 0.15,
       });
       const sphere = new THREE.Mesh(geometry, material);
       group.add(sphere);
+
+      // Purple ring for current user's flares
+      if (isCurrentUser) {
+        const ringGeo = new THREE.RingGeometry(sphereSize + 1, sphereSize + 1.8, 32);
+        const ringMat = new THREE.MeshBasicMaterial({
+          color: "#C084FC",
+          transparent: true,
+          opacity: 0.7,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        });
+        const ring = new THREE.Mesh(ringGeo, ringMat);
+        group.add(ring);
+      }
 
       const glowSize = sphereSize * (isDraft ? 3 : isNew ? 2.5 : 1.8);
       const glowGeo = new THREE.SphereGeometry(glowSize, 24, 24);

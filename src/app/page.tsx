@@ -35,7 +35,7 @@ export default function Home() {
   const [chatState, setChatState] = useState<"SYMPTOM_INTAKE" | "QUESTIONING" | "ONBOARDING" | "CONVERGED">("SYMPTOM_INTAKE");
   const [sensitivityProfile, setSensitivityProfile] = useState<SensitivityProfile | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [, setFlareCount] = useState(0);
+  const [flareCount, setFlareCount] = useState(0);
   const [, setHasBackground] = useState(false);
 
   const { flares, newFlareIds, clusterMetadata } = useFlarePolling(2000);
@@ -113,6 +113,7 @@ export default function Home() {
         }
         if (response.converged) {
           setConverged(true);
+          setFlareCount((prev) => prev + 1);
           if (response.sensitivity_profile) {
             setSensitivityProfile(response.sensitivity_profile);
           }
@@ -142,6 +143,8 @@ export default function Home() {
           sensitivityProfile={sensitivityProfile}
           onSend={handleSend}
           isLoading={isLoading}
+          flareCount={flareCount}
+          converged={converged}
         />
       </div>
 
@@ -153,6 +156,7 @@ export default function Home() {
           draftNodeId={draftActive && !converged ? DRAFT_NODE_ID : null}
           axisScores={axisScores}
           clusterMetadata={clusterMetadata}
+          currentUserId={userId}
         />
       </div>
     </main>

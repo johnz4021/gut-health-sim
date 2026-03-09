@@ -12,6 +12,8 @@ interface Props {
   sensitivityProfile: SensitivityProfile | null;
   onSend: (message: string) => void;
   isLoading: boolean;
+  flareCount: number;
+  converged: boolean;
 }
 
 export default function ChatPanel({
@@ -20,6 +22,8 @@ export default function ChatPanel({
   sensitivityProfile,
   onSend,
   isLoading,
+  flareCount,
+  converged,
 }: Props) {
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -43,21 +47,43 @@ export default function ChatPanel({
   return (
     <div className="flex flex-col h-full glass-panel rounded-r-none">
       {/* Header */}
-      <div className="px-6 py-5 border-b border-white/5">
-        <h1 className="font-display text-xl tracking-widest text-white">
-          GUTMAP
-        </h1>
-        <p className="text-[11px] text-white/40 mt-1 tracking-wide">
-          IBS Trigger Discovery
-        </p>
+      <div className="px-6 py-5 border-b border-white/5 flex items-center justify-between">
+        <div>
+          <h1 className="font-display text-xl tracking-widest text-white">
+            GUTMAP
+          </h1>
+          <p className="text-[11px] text-white/40 mt-1 tracking-wide">
+            IBS Trigger Discovery
+          </p>
+        </div>
+        {flareCount > 0 && (
+          <div className="px-3 py-1.5 rounded-full bg-[#C084FC]/15 border border-[#C084FC]/30">
+            <span className="text-[10px] font-medium tracking-wider text-[#C084FC]">
+              {flareCount} FLARE{flareCount > 1 ? "S" : ""} ON FILE
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
         {messages.length === 0 && (
           <div className="text-center text-white/20 text-sm mt-20">
-            <p className="font-display text-base mb-2">Describe your symptoms</p>
-            <p className="text-xs">Tell me about your most recent flare-up</p>
+            {flareCount > 0 ? (
+              <>
+                <p className="font-display text-base mb-2">Welcome back</p>
+                <p className="text-xs">
+                  You have {flareCount} flare{flareCount > 1 ? "s" : ""} on file.
+                  Your history will inform this session.
+                </p>
+                <p className="text-xs mt-1">Tell me about your latest flare-up.</p>
+              </>
+            ) : (
+              <>
+                <p className="font-display text-base mb-2">Describe your symptoms</p>
+                <p className="text-xs">Tell me about your most recent flare-up</p>
+              </>
+            )}
           </div>
         )}
         {messages.map((msg) => (
@@ -78,6 +104,15 @@ export default function ChatPanel({
       {/* Profile card */}
       {sensitivityProfile && <ProfileCard profile={sensitivityProfile} />}
 
+      {/* Post-convergence message */}
+      {converged && sensitivityProfile && (
+        <div className="px-4 pb-2">
+          <p className="text-[11px] text-[#C084FC]/70 text-center">
+            This flare has been added to your profile. Next time you visit, your history will be ready.
+          </p>
+        </div>
+      )}
+
       {/* Input */}
       <form onSubmit={handleSubmit} className="p-4 border-t border-white/5">
         <div className="flex gap-2">
@@ -85,7 +120,7 @@ export default function ChatPanel({
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Describe your symptoms..."
+            placeholder={converged ? "Session complete" : "Describe your symptoms..."}
             disabled={isLoading || !!sensitivityProfile}
             className="flex-1 bg-transparent border border-white/10 rounded-lg px-4 py-2.5 text-sm text-white placeholder-white/30 outline-none focus:border-[#4ECDC4]/50 transition-colors disabled:opacity-40"
           />

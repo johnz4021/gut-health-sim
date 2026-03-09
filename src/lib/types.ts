@@ -19,6 +19,21 @@ export interface UserBackground {
   diagnosed?: boolean;
   onset_period?: string;
   known_triggers?: string[];
+  active_medications?: string[];
+  dietary_baseline?: string | null;
+  tracks_menstrual_cycle?: boolean | null;
+  diagnosed_comorbidities?: string[];
+}
+
+export interface FlareRecord {
+  session_id: string;
+  timestamp: string;
+  axis_scores: AxisScores;
+  symptoms: string[];
+  confirmed_triggers: string[];
+  primary_trigger: string;
+  amplifiers: string[];
+  summary: string;
 }
 
 export interface UserProfileSummary {
@@ -26,6 +41,10 @@ export interface UserProfileSummary {
   flare_count: number;
   has_background: boolean;
   background?: UserBackground;
+  personal_baseline?: AxisScores;
+  known_triggers?: string[];
+  high_confidence_axes?: string[];
+  flare_history?: FlareRecord[];
 }
 
 export interface ClusterMetadata {

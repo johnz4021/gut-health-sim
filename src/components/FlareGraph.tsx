@@ -14,6 +14,7 @@ interface Props {
   draftNodeId: string | null;
   axisScores: AxisScores;
   clusterMetadata: Record<string, ClusterMetadata>;
+  currentUserId: string | null;
 }
 
 export default function FlareGraph(props: Props) {
