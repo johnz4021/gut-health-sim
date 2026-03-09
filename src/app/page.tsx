@@ -4,8 +4,9 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import ChatPanel from "@/components/ChatPanel";
 import FlareGraph from "@/components/FlareGraph";
 import { useFlarePolling } from "@/hooks/useFlarePolling";
-import { createSession, sendMessage } from "@/lib/api";
-import { ChatMessage, AxisScores, SensitivityProfile, FlareNode } from "@/lib/types";
+import { createSession, sendMessage, fetchUserProfile } from "@/lib/api";
+import NodeDetailPanel from "@/components/NodeDetailPanel";
+import { ChatMessage, AxisScores, SensitivityProfile, FlareNode, FlareRecord } from "@/lib/types";
 import { DEFAULT_NOISE_COLOR } from "@/lib/constants";
 
 const DEFAULT_AXIS_SCORES: AxisScores = {
@@ -37,6 +38,9 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [flareCount, setFlareCount] = useState(0);
   const [, setHasBackground] = useState(false);
+  const [flareHistory, setFlareHistory] = useState<FlareRecord[]>([]);
+  const [selectedNode, setSelectedNode] = useState<FlareNode | null>(null);
+  const [showMyFlares, setShowMyFlares] = useState(false);
 
   const { flares, newFlareIds, clusterMetadata } = useFlarePolling(2000);
 
@@ -64,6 +68,35 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flares, draftActive, converged]);
 
+  const displayFlares = useMemo(() => {
+    if (!showMyFlares || !userId) return mergedFlares;
+
+    // Flares from polling that belong to this user
+    const liveUserFlares = mergedFlares.filter(
+      (node) => node.user_id === userId || node.id === DRAFT_NODE_ID
+    );
+
+    // Convert flareHistory records to FlareNode objects (for past sessions)
+    const liveIds = new Set(liveUserFlares.map((n) => n.id));
+    const historyNodes: FlareNode[] = flareHistory
+      .filter((rec) => !liveIds.has(rec.session_id))
+      .map((rec) => ({
+        id: rec.session_id,
+        label: rec.summary || rec.primary_trigger || "Past flare",
+        symptoms: rec.symptoms,
+        clusterId: -1,
+        color: DEFAULT_NOISE_COLOR,
+        confidence: 1,
+        synthetic: false,
+        summary: rec.summary,
+        axis_scores: rec.axis_scores,
+        user_id: userId,
+        created_at: rec.timestamp,
+      }));
+
+    return [...liveUserFlares, ...historyNodes];
+  }, [mergedFlares, showMyFlares, userId, flareHistory]);
+
   // Create session on mount (guard against strict mode double-mount)
   const sessionCreatedRef = useRef(false);
   useEffect(() => {
@@ -75,12 +108,17 @@ export default function Home() {
       setSessionId(res.session_id);
       if (res.flare_count !== undefined) setFlareCount(res.flare_count);
       if (res.has_background !== undefined) setHasBackground(res.has_background);
+      if (res.flare_count && res.flare_count > 0) {
+        fetchUserProfile(uid).then((profile) => {
+          if (profile.flare_history) setFlareHistory(profile.flare_history);
+        });
+      }
     });
   }, []);
 
   const handleSend = useCallback(
     async (content: string) => {
-      if (!sessionId || converged) return;
+      if (!sessionId) return;
 
       // Add user message
       const userMsg: ChatMessage = {
@@ -130,7 +168,7 @@ export default function Home() {
         setIsLoading(false);
       }
     },
-    [sessionId, converged, userId]
+    [sessionId, userId]
   );
 
   return (
@@ -145,19 +183,34 @@ export default function Home() {
           isLoading={isLoading}
           flareCount={flareCount}
           converged={converged}
+          flareHistory={flareHistory}
         />
       </div>
 
       {/* 3D Force Graph — 60% */}
-      <div className="w-[60%] h-full">
+      <div className="w-[60%] h-full relative">
+        <button
+          onClick={() => setShowMyFlares((v) => !v)}
+          className="absolute top-4 left-4 z-20 px-3 py-1.5 text-xs font-medium rounded-md border border-white/20 bg-black/40 backdrop-blur-sm text-white/80 hover:bg-white/10 hover:text-white transition-colors"
+        >
+          {showMyFlares ? "My Flares" : "Crowd"}
+        </button>
         <FlareGraph
-          flares={mergedFlares}
+          flares={displayFlares}
           newFlareIds={newFlareIds}
           draftNodeId={draftActive && !converged ? DRAFT_NODE_ID : null}
           axisScores={axisScores}
           clusterMetadata={clusterMetadata}
           currentUserId={userId}
+          onNodeSelect={setSelectedNode}
         />
+        {selectedNode && (
+          <NodeDetailPanel
+            node={selectedNode}
+            clusterMetadata={clusterMetadata}
+            onClose={() => setSelectedNode(null)}
+          />
+        )}
       </div>
     </main>
   );

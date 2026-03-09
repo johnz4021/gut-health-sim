@@ -35,6 +35,7 @@ interface Session {
   axis_scores: AxisScores;
   questions_asked: string[];
   history: Array<{ role: "user" | "assistant"; content: string }>;
+  converged_cluster?: number;
 }
 
 // Use globalThis to survive Next.js HMR in dev mode
@@ -211,7 +212,16 @@ If converged=true, sensitivity_profile must be:
   "amplifiers": ["list of cross-axis amplification effects observed, e.g. 'stress amplifies FODMAP reactivity'"],
   "confidence": 0.0,
   "triggers": ["specific triggers identified"]
-}`;
+}
+
+IMPORTANT — when you converge, your "reply" MUST include 2-3 IMMEDIATE, PRACTICAL REMEDIES the user can do RIGHT NOW to feel better. These should be concrete relief actions, not prevention tips. Examples:
+- "Sip hot water or peppermint tea — it relaxes intestinal smooth muscle and can ease cramping within 15-20 min"
+- "Try lying on your left side with knees pulled up — this helps trapped gas move through"
+- "Place a heating pad or warm towel on your lower abdomen for 10 min to calm the spasms"
+- "Take slow diaphragmatic breaths (4 sec in, 6 sec out) — this activates your vagus nerve and slows gut contractions"
+- "If you have peppermint oil capsules, take one now — they're clinically shown to reduce IBS pain"
+- "Avoid eating anything else for the next 1-2 hours to let your gut settle"
+Tailor remedies to their specific symptoms (bloating → gas relief positions, cramping → heat + peppermint, urgency → breathing + sitting still, nausea → ginger or cold compress on wrist). Be specific to what THEY are experiencing.`;
 }
 
 export async function POST(request: Request) {
@@ -242,8 +252,73 @@ export async function POST(request: Request) {
   const session = sessions.get(session_id)!;
 
   if (session.state === "CONVERGED") {
+    // Post-convergence: crowd-sourced advice from cluster neighbors
+    session.history.push({ role: "user", content: message });
+
+    // Gather cluster neighbor data
+    let neighborContext = "";
+    const clusterId = session.converged_cluster;
+    if (clusterId !== undefined && clusterId !== -1) {
+      try {
+        const flaresPath = path.join(process.cwd(), "public/flares_processed.json");
+        if (fs.existsSync(flaresPath)) {
+          const allFlares = JSON.parse(fs.readFileSync(flaresPath, "utf-8")) as Array<{
+            clusterId?: number;
+            summary?: string;
+            symptoms?: string[];
+            axis_scores?: Record<string, number>;
+          }>;
+          const neighbors = allFlares
+            .filter((f) => f.clusterId === clusterId)
+            .slice(0, 8);
+
+          if (neighbors.length > 0) {
+            neighborContext = `\nCLUSTER NEIGHBOR DATA (${neighbors.length} people with similar trigger profiles):\n`;
+            for (const n of neighbors) {
+              neighborContext += `- Summary: ${n.summary || "n/a"}, Symptoms: [${(n.symptoms || []).join(", ")}], Scores: ${JSON.stringify(n.axis_scores || {})}\n`;
+            }
+          }
+        }
+      } catch {
+        // non-fatal
+      }
+
+      // Add cluster metadata
+      const meta = loadClusterMetadata();
+      const clusterInfo = meta[String(clusterId)];
+      if (clusterInfo) {
+        neighborContext += `\nCLUSTER INFO: "${clusterInfo.label}" — ${clusterInfo.description}\n`;
+      }
+    }
+
+    const adviceSystemPrompt = `You are GutMap, a post-analysis advisor for IBS trigger management. The user has already completed their flare investigation and been mapped to a cluster of similar patients.
+
+YOUR USER'S PROFILE:
+- Axis scores: ${JSON.stringify(session.axis_scores)}
+- Symptoms: ${session.symptoms.join(", ") || "unknown"}
+${neighborContext}
+
+INSTRUCTIONS:
+- Give specific, actionable advice grounded in what others in this cluster experience
+- Reference "people in your cluster" or "others with similar triggers" when making recommendations
+- Draw on the neighbor data above to identify common patterns and effective strategies
+- Keep responses concise (2-4 sentences) and warm
+- You can suggest dietary changes, lifestyle adjustments, tracking strategies, etc.
+- Do NOT give medical diagnoses or suggest prescription medications
+- Continue the conversation naturally — the user may ask follow-up questions`;
+
+    const adviceResponse = await client.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 400,
+      system: adviceSystemPrompt,
+      messages: session.history,
+    });
+
+    const adviceText = adviceResponse.content[0].type === "text" ? adviceResponse.content[0].text : "I'm here to help — could you ask that again?";
+    session.history.push({ role: "assistant", content: adviceText });
+
     return NextResponse.json({
-      reply: "Your session is complete. Refresh to investigate a new flare.",
+      reply: adviceText,
       state: "CONVERGED",
       axis_scores: session.axis_scores,
       converged: true,
@@ -347,6 +422,7 @@ export async function POST(request: Request) {
       bestCluster = AXIS_TO_CLUSTER[maxAxis] ?? -1;
     }
 
+    session.converged_cluster = bestCluster;
     const clusterColor = meta[String(bestCluster)]?.color ?? "#888888";
     const flareId = `live-${session_id}-${Date.now()}`;
     const createdAt = new Date().toISOString();

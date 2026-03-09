@@ -1,5 +1,5 @@
 import { API_BASE } from "./constants";
-import { ChatResponse, FlaresResponse, UserProfileSummary } from "./types";
+import { ChatResponse, FlaresResponse, FlareNode, Persona, UserBackground, UserProfileSummary } from "./types";
 
 interface SessionResponse {
   session_id: string;
@@ -37,5 +37,14 @@ export async function fetchFlares(): Promise<FlaresResponse> {
 
 export async function fetchUserProfile(user_id: string): Promise<UserProfileSummary> {
   const res = await fetch(`${API_BASE}/api/user?user_id=${encodeURIComponent(user_id)}`);
+  return res.json();
+}
+
+export async function fetchPersona(node: FlareNode, clusterLabel: string, userBackground?: Partial<UserBackground>): Promise<Persona> {
+  const res = await fetch(`${API_BASE}/api/persona`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ node, cluster_label: clusterLabel, user_context: userBackground }),
+  });
   return res.json();
 }

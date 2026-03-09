@@ -2,8 +2,12 @@ import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 
-// Real flares added during live sessions
-const sessionFlares: object[] = [];
+// Real flares added during live sessions (globalThis survives HMR)
+const globalFlares = globalThis as unknown as { __gutmap_session_flares?: object[] };
+if (!globalFlares.__gutmap_session_flares) {
+  globalFlares.__gutmap_session_flares = [];
+}
+const sessionFlares = globalFlares.__gutmap_session_flares;
 
 // Cache cluster metadata at module level
 let clusterMetadataCache: Record<string, unknown> | null = null;

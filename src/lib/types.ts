@@ -86,6 +86,13 @@ export interface FlareNode {
   __threeObj?: any;
 }
 
+export interface Persona {
+  display_name: string;
+  bio: string;
+  background: Partial<UserBackground>;
+  what_helps: string[];
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";

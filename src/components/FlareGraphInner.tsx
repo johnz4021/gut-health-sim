@@ -87,11 +87,12 @@ interface Props {
   axisScores: AxisScores;
   clusterMetadata: Record<string, ClusterMetadata>;
   currentUserId: string | null;
+  onNodeSelect?: (node: FlareNode | null) => void;
   width: number;
   height: number;
 }
 
-export default function FlareGraphInner({ flares, newFlareIds, draftNodeId, axisScores, clusterMetadata, currentUserId, width, height }: Props) {
+export default function FlareGraphInner({ flares, newFlareIds, draftNodeId, axisScores, clusterMetadata, currentUserId, onNodeSelect, width, height }: Props) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const graphRef = useRef<any>(null);
   const newFlareIdsRef = useRef<Set<string>>(newFlareIds);
@@ -435,6 +436,9 @@ export default function FlareGraphInner({ flares, newFlareIds, draftNodeId, axis
     []
   );
 
+  const onNodeSelectRef = useRef(onNodeSelect);
+  onNodeSelectRef.current = onNodeSelect;
+
   const handleNodeClick = useCallback((node: FlareNode) => {
     const fg = graphRef.current;
     if (fg) {
@@ -453,6 +457,7 @@ export default function FlareGraphInner({ flares, newFlareIds, draftNodeId, axis
         2000
       );
     }
+    onNodeSelectRef.current?.(node);
   }, []);
 
   const handleNodeHover = useCallback((node: FlareNode | null) => {
@@ -473,6 +478,7 @@ export default function FlareGraphInner({ flares, newFlareIds, draftNodeId, axis
       nodeThreeObjectExtend={false}
       onNodeClick={handleNodeClick as never}
       onNodeHover={handleNodeHover as never}
+      onBackgroundClick={() => onNodeSelectRef.current?.(null)}
       backgroundColor="#000011"
       showNavInfo={false}
       enableNodeDrag={false}

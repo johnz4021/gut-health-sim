@@ -4,7 +4,8 @@ import { useRef, useEffect, useState } from "react";
 import ChatMessage from "./ChatMessage";
 import SensitivityBar from "./ProbabilityBar";
 import ProfileCard from "./PhenotypeCard";
-import { ChatMessage as ChatMessageType, AxisScores, SensitivityProfile } from "@/lib/types";
+import { ChatMessage as ChatMessageType, AxisScores, SensitivityProfile, FlareRecord } from "@/lib/types";
+import FlareHistoryCards from "./FlareHistoryCards";
 
 interface Props {
   messages: ChatMessageType[];
@@ -14,6 +15,7 @@ interface Props {
   isLoading: boolean;
   flareCount: number;
   converged: boolean;
+  flareHistory: FlareRecord[];
 }
 
 export default function ChatPanel({
@@ -24,6 +26,7 @@ export default function ChatPanel({
   isLoading,
   flareCount,
   converged,
+  flareHistory,
 }: Props) {
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -76,7 +79,8 @@ export default function ChatPanel({
                   You have {flareCount} flare{flareCount > 1 ? "s" : ""} on file.
                   Your history will inform this session.
                 </p>
-                <p className="text-xs mt-1">Tell me about your latest flare-up.</p>
+                <FlareHistoryCards history={flareHistory} />
+                <p className="text-xs mt-3">Tell me about your latest flare-up.</p>
               </>
             ) : (
               <>
@@ -108,7 +112,7 @@ export default function ChatPanel({
       {converged && sensitivityProfile && (
         <div className="px-4 pb-2">
           <p className="text-[11px] text-[#C084FC]/70 text-center">
-            This flare has been added to your profile. Next time you visit, your history will be ready.
+            Your flare has been mapped. Ask me anything — I'll draw on others with similar triggers.
           </p>
         </div>
       )}
@@ -120,13 +124,13 @@ export default function ChatPanel({
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder={converged ? "Session complete" : "Describe your symptoms..."}
-            disabled={isLoading || !!sensitivityProfile}
+            placeholder={converged ? "Ask about your triggers..." : "Describe your symptoms..."}
+            disabled={isLoading}
             className="flex-1 bg-transparent border border-white/10 rounded-lg px-4 py-2.5 text-sm text-white placeholder-white/30 outline-none focus:border-[#4ECDC4]/50 transition-colors disabled:opacity-40"
           />
           <button
             type="submit"
-            disabled={isLoading || !input.trim() || !!sensitivityProfile}
+            disabled={isLoading || !input.trim()}
             className="px-4 py-2.5 rounded-lg bg-[#4ECDC4]/20 border border-[#4ECDC4]/30 text-[#4ECDC4] text-sm font-medium hover:bg-[#4ECDC4]/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
           >
             Send
